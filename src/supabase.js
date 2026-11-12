@@ -32,7 +32,7 @@ function friendlyDbError(error) {
     return 'The database is not set up yet. Run supabase/setup.sql in your Supabase SQL Editor.';
   }
   if (/bucket not found/i.test(message)) {
-    return 'The image bucket "menu-images" was not found. Run supabase/setup.sql or create the bucket in Supabase Storage.';
+    return `The image bucket "${config.bucket}" was not found. Run supabase/setup.sql or create the bucket in Supabase Storage.`;
   }
   if (/invalid api key|jwt/i.test(message)) {
     return 'Supabase rejected the API key. Check SUPABASE_SERVICE_ROLE_KEY.';

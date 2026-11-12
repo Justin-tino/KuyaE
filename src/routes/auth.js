@@ -57,14 +57,16 @@ router.get('/status', async (req, res) => {
 
   try {
     const sb = getClient();
-    const { count, error } = await sb.from('users').select('*', { count: 'exact', head: true });
+    // NOTE: a HEAD request with count returns 204 and no count when the table is
+    // missing, so a plain SELECT is used here to detect a database that is not set up.
+    const { data: existingUsers, error } = await sb.from('users').select('id').limit(1);
     if (error) {
       return res.json({ ...base, dbError: true, dbMessage: friendlyDbError(error) });
     }
     let restaurantName = null;
     const { data: settings } = await sb.from('settings').select('restaurant_name').eq('id', 1).maybeSingle();
     if (settings) restaurantName = settings.restaurant_name;
-    return res.json({ ...base, needsSetup: (count || 0) === 0, restaurantName });
+    return res.json({ ...base, needsSetup: (existingUsers || []).length === 0, restaurantName });
   } catch (err) {
     return res.json({ ...base, dbError: true, dbMessage: friendlyDbError(err) });
   }
@@ -85,9 +87,9 @@ router.post('/setup/first-admin', loginLimiter, async (req, res, next) => {
     if (!parsed.success) return res.status(400).json({ error: firstZodError(parsed.error) });
 
     const sb = getClient();
-    const { count, error: countError } = await sb.from('users').select('*', { count: 'exact', head: true });
+    const { data: existingUsers, error: countError } = await sb.from('users').select('id').limit(1);
     if (countError) return res.status(503).json({ error: friendlyDbError(countError) });
-    if ((count || 0) > 0) {
+    if ((existingUsers || []).length > 0) {
       return res.status(409).json({ error: 'Setup was already completed. Please sign in.' });
     }
 

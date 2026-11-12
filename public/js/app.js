@@ -419,6 +419,9 @@ async function mountView() {
     return;
   }
 
+  // Leaving a page should never keep its dialog (payment, order details, ...) on screen.
+  closeAllModals();
+
   const token = ++mountToken;
   const title = document.getElementById('page-title');
   if (title) title.textContent = route.title;

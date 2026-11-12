@@ -10,7 +10,7 @@ const config = {
   isProduction: (env.NODE_ENV || 'development') === 'production',
   supabaseUrl: (env.SUPABASE_URL || '').trim().replace(/\/+$/, ''),
   supabaseServiceKey: (env.SUPABASE_SERVICE_ROLE_KEY || '').trim(),
-  bucket: (env.SUPABASE_BUCKET || 'menu-images').trim(),
+  bucket: (env.SUPABASE_BUCKET || 'menus').trim(),
   sessionSecret: (env.SESSION_SECRET || '').trim(),
   sessionHours: Math.max(1, parseInt(env.SESSION_HOURS || '12', 10) || 12),
   timezone: (env.TIMEZONE || 'Asia/Manila').trim(),

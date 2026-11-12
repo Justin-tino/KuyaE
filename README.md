@@ -106,7 +106,7 @@ npm run watch:css  # terminal 2
    - `users`, `sessions`, `settings`, `menu_items`, `orders`, `order_items`, `audit_logs`
    - the `create_pos_order` function (atomic order creation with server-side prices)
    - indexes, updated-at triggers, Row Level Security with no public policies
-   - the `menu-images` storage bucket (public read, server-side uploads only)
+   - the `menus` storage bucket (public read, server-side uploads only)
    - the realtime publication for live updates
 3. Open **Project Settings > API** and copy:
    - **Project URL** -> `SUPABASE_URL`
@@ -116,7 +116,7 @@ npm run watch:css  # terminal 2
 The first account is always an Admin and can only be created while the `users` table is empty.
 After that the same endpoint is permanently disabled.
 
-> The `menu-images` bucket is created by the SQL file. If it is ever deleted, the server recreates it
+> The `menus` bucket is created by the SQL file. If it is ever deleted, the server recreates it
 > automatically on the next photo upload.
 
 ---
@@ -181,6 +181,17 @@ warning-only random secret).
 - Prices are entered in pesos in the menu form and stored as exact decimals in the database.
 - Change is calculated from the cash received; the API validates that cash is not below the total.
 
+### Order numbers
+
+Every order gets a sequential number (`#001`, `#002`, ...) that never repeats, because the database
+assigns it. If you clear all orders and want the numbering to start again from `#001`, run this in
+the Supabase SQL Editor:
+
+```sql
+delete from public.orders;
+alter table public.orders alter column order_number restart with 1;
+```
+
 ---
 
 ## 6. Environment variables
@@ -188,11 +199,11 @@ warning-only random secret).
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `SUPABASE_URL` | yes | - | Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | yes | - | Server-side key. Keep secret. |
+| `SUPABASE_SERVICE_ROLE_KEY` | yes | - | Server-side key. Keep secret. Use the project's `service_role` key (or a new `sb_secret_...` secret key). |
 | `SESSION_SECRET` | production | dev fallback | Signs session tokens |
 | `PORT` | no | `3000` | HTTP port (Render sets it) |
 | `TIMEZONE` | no | `Asia/Manila` | All dates, reports and the clock |
-| `SUPABASE_BUCKET` | no | `menu-images` | Storage bucket for menu photos |
+| `SUPABASE_BUCKET` | no | `menus` | Storage bucket for menu photos |
 | `SESSION_HOURS` | no | `12` | How long a signed-in session lasts |
 | `NODE_ENV` | no | `development` | `production` enables secure cookies and strict checks |
 
@@ -256,7 +267,7 @@ If it never turns "Live", check the service logs for Supabase realtime errors an
 `supabase/setup.sql` completed (it adds the tables to the realtime publication).
 
 **Menu photos do not upload**
-Confirm the `menu-images` bucket exists (the SQL file creates it) and that the file is JPG, PNG or
+Confirm the `menus` bucket exists (the SQL file creates it) and that the file is JPG, PNG or
 WebP under 5 MB. The server needs the `service_role` key to write to storage.
 
 **Receipt prints without the logo**
@@ -277,5 +288,5 @@ dates use it.
 ## 10. Backups
 
 Use the Supabase dashboard (**Database > Backups**) or `pg_dump` with the connection string from
-**Project Settings > Database**. Menu photos live in **Storage > menu-images** and can be downloaded
+**Project Settings > Database**. Menu photos live in **Storage > menus** and can be downloaded
 from the dashboard. Export a CSV sales report regularly as a simple off-site copy.

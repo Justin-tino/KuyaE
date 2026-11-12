@@ -21,6 +21,71 @@ function brandHeader(status, subtitle) {
 
 export function renderSetupPage(container, status) {
   const missing = (status && status.missing) || [];
+  const needsEnv = !status || !status.configured;
+  const dbMessage = status && status.dbMessage;
+
+  const steps = needsEnv
+    ? `
+        <li class="flex gap-4">
+          <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-stone-900 font-bold text-white">1</span>
+          <div>
+            <p class="font-bold">Create a Supabase project</p>
+            <p class="text-stone-600">Sign in at supabase.com, create a project, then open the SQL Editor.</p>
+          </div>
+        </li>
+        <li class="flex gap-4">
+          <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-stone-900 font-bold text-white">2</span>
+          <div>
+            <p class="font-bold">Run the database setup file</p>
+            <p class="text-stone-600">Paste the whole contents of <code class="rounded bg-stone-200 px-1.5 py-0.5 font-mono text-sm">supabase/setup.sql</code> into the SQL Editor and click Run. It creates the tables, security rules, realtime and the menu photo bucket.</p>
+          </div>
+        </li>
+        <li class="flex gap-4">
+          <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-stone-900 font-bold text-white">3</span>
+          <div>
+            <p class="font-bold">Add the environment variables</p>
+            <p class="text-stone-600">In Render (or your <code class="rounded bg-stone-200 px-1.5 py-0.5 font-mono text-sm">.env</code> file when testing locally):</p>
+            <ul class="mt-2 space-y-1 font-mono text-sm">
+              ${(missing.length ? missing : ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SESSION_SECRET'])
+                .map(
+                  (name) =>
+                    `<li class="flex items-center gap-2"><span class="inline-block h-2 w-2 rounded-full bg-red-600"></span>${esc(name)}</li>`
+                )
+                .join('')}
+            </ul>
+            <p class="mt-2 text-sm text-stone-500">Find the Project URL and secret key under Project Settings &gt; API Keys. Generate SESSION_SECRET with a long random string.</p>
+          </div>
+        </li>
+        <li class="flex gap-4">
+          <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-stone-900 font-bold text-white">4</span>
+          <div>
+            <p class="font-bold">Restart the app</p>
+            <p class="text-stone-600">Redeploy on Render (or restart locally). This page will then ask you to create the first admin account.</p>
+          </div>
+        </li>`
+    : `
+        <li class="flex gap-4">
+          <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-stone-900 font-bold text-white">1</span>
+          <div>
+            <p class="font-bold">Open the Supabase SQL Editor</p>
+            <p class="text-stone-600">In your Supabase project, click <span class="font-semibold">SQL Editor</span> in the left menu.</p>
+          </div>
+        </li>
+        <li class="flex gap-4">
+          <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-stone-900 font-bold text-white">2</span>
+          <div>
+            <p class="font-bold">Paste and run the setup file</p>
+            <p class="text-stone-600">Open <code class="rounded bg-stone-200 px-1.5 py-0.5 font-mono text-sm">supabase/setup.sql</code>, copy everything, paste it into the editor and click <span class="font-semibold">Run</span>.</p>
+          </div>
+        </li>
+        <li class="flex gap-4">
+          <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-stone-900 font-bold text-white">3</span>
+          <div>
+            <p class="font-bold">Come back and click Check again</p>
+            <p class="text-stone-600">No restart is needed. The app will then ask you to create the first admin account.</p>
+          </div>
+        </li>`;
+
   container.innerHTML = `
     <div class="flex min-h-screen items-center justify-center bg-stone-100 p-4 sm:p-8">
       <div class="card w-full max-w-3xl p-6 sm:p-10">
@@ -30,52 +95,16 @@ export function renderSetupPage(container, status) {
             <span class="mt-0.5 shrink-0">${icon('alert', 'w-7 h-7')}</span>
             <div>
               <p class="text-xl font-extrabold">Setup required</p>
-              <p class="mt-1 font-semibold">The system is not connected to Supabase yet.</p>
-              ${status && status.dbMessage ? `<p class="mt-2 text-sm font-semibold">${esc(status.dbMessage)}</p>` : ''}
+              <p class="mt-1 font-semibold">${
+                needsEnv ? 'The system is not connected to Supabase yet.' : 'Supabase is connected, but the database tables are not created yet.'
+              }</p>
+              ${dbMessage ? `<p class="mt-2 text-sm font-semibold">${esc(dbMessage)}</p>` : ''}
             </div>
           </div>
         </div>
 
-        <h2 class="mt-8 text-xl font-extrabold">How to finish the setup</h2>
-        <ol class="mt-4 space-y-5">
-          <li class="flex gap-4">
-            <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-stone-900 font-bold text-white">1</span>
-            <div>
-              <p class="font-bold">Create a Supabase project</p>
-              <p class="text-stone-600">Sign in at supabase.com, create a project, then open the SQL Editor.</p>
-            </div>
-          </li>
-          <li class="flex gap-4">
-            <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-stone-900 font-bold text-white">2</span>
-            <div>
-              <p class="font-bold">Run the database setup file</p>
-              <p class="text-stone-600">Paste the whole contents of <code class="rounded bg-stone-200 px-1.5 py-0.5 font-mono text-sm">supabase/setup.sql</code> into the SQL Editor and click Run. It creates the tables, security rules, realtime and the menu photo bucket.</p>
-            </div>
-          </li>
-          <li class="flex gap-4">
-            <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-stone-900 font-bold text-white">3</span>
-            <div>
-              <p class="font-bold">Add the environment variables</p>
-              <p class="text-stone-600">In Render (or your <code class="rounded bg-stone-200 px-1.5 py-0.5 font-mono text-sm">.env</code> file when testing locally):</p>
-              <ul class="mt-2 space-y-1 font-mono text-sm">
-                ${(missing.length ? missing : ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SESSION_SECRET'])
-                  .map(
-                    (name) =>
-                      `<li class="flex items-center gap-2"><span class="inline-block h-2 w-2 rounded-full bg-red-600"></span>${esc(name)}</li>`
-                  )
-                  .join('')}
-              </ul>
-              <p class="mt-2 text-sm text-stone-500">Find the Project URL and service_role key under Project Settings &gt; API. Generate SESSION_SECRET with a long random string.</p>
-            </div>
-          </li>
-          <li class="flex gap-4">
-            <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-stone-900 font-bold text-white">4</span>
-            <div>
-              <p class="font-bold">Restart the app</p>
-              <p class="text-stone-600">Redeploy on Render (or restart locally). This page will then ask you to create the first admin account.</p>
-            </div>
-          </li>
-        </ol>
+        <h2 class="mt-8 text-xl font-extrabold">${needsEnv ? 'How to finish the setup' : 'One step left'}</h2>
+        <ol class="mt-4 space-y-5">${steps}</ol>
 
         <div class="mt-8 flex flex-wrap items-center gap-3">
           <button type="button" class="btn btn-lg btn-primary" id="recheck">${icon('refresh', 'w-5 h-5')} Check again</button>

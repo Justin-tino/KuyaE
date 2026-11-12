@@ -72,7 +72,7 @@ create table if not exists public.settings (
 insert into public.settings (id) values (1) on conflict (id) do nothing;
 
 -- ---------------------------------------------------------------------------
--- Menu items (each item can have a photo stored in the menu-images bucket)
+-- Menu items (each item can have a photo stored in the "menus" storage bucket)
 -- ---------------------------------------------------------------------------
 create table if not exists public.menu_items (
   id uuid primary key default gen_random_uuid(),
@@ -348,11 +348,12 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- Storage bucket for menu photos (public read, server-only write).
+-- Uses the "menus" bucket. If it already exists it is updated in place.
 -- ---------------------------------------------------------------------------
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values (
-  'menu-images',
-  'menu-images',
+  'menus',
+  'menus',
   true,
   5242880,
   array['image/jpeg', 'image/png', 'image/webp']

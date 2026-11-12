@@ -20,13 +20,18 @@ const { getClient } = require('./supabase');
 const { toCents } = require('./lib/helpers');
 
 const clients = new Set();
-let channel = null;
+const channels = new Map(); // table -> { ch, up }
 let realtimeUp = false;
 let channelStarted = false;
 let lastPollAt = 0;
 let lastSignatures = null;
 let lastOrderId = null;
 let pollFailures = 0;
+
+// One channel per table. Supabase Realtime only reliably registers a single
+// postgres_changes binding per channel, so bundling every table into one
+// channel silently drops most events.
+const REALTIME_TABLES = ['orders', 'order_items', 'menu_items', 'users', 'settings', 'audit_logs'];
 
 const POLL_FAST_MS = 3000; // realtime unavailable
 const POLL_SAFETY_MS = 15000; // realtime up - safety net only
@@ -91,26 +96,40 @@ function startRealtimeChannel() {
   if (!sb || channelStarted) return;
   channelStarted = true;
 
+  for (const table of REALTIME_TABLES) subscribeTable(sb, table);
+}
+
+function refreshRealtimeUp() {
+  const up = [...channels.values()].filter((entry) => entry.up).length;
+  realtimeUp = up === REALTIME_TABLES.length;
+  return up;
+}
+
+function subscribeTable(sb, table) {
   try {
-    channel = sb.channel('pos-live');
-    for (const table of ['orders', 'order_items', 'menu_items', 'users', 'settings', 'audit_logs']) {
-      channel.on('postgres_changes', { event: '*', schema: 'public', table }, (payload) =>
-        handleChange(table, payload)
-      );
-    }
-    channel.subscribe((status) => {
+    const ch = sb.channel(`pos-${table}`);
+    const entry = { ch, up: false };
+    channels.set(table, entry);
+    ch.on('postgres_changes', { event: '*', schema: 'public', table }, (payload) =>
+      handleChange(table, payload)
+    );
+    ch.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        realtimeUp = true;
-        console.log('[realtime] connected to Supabase Realtime');
+        entry.up = true;
+        const up = refreshRealtimeUp();
+        if (up === REALTIME_TABLES.length) {
+          console.log('[realtime] connected to Supabase Realtime');
+        }
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-        if (realtimeUp) console.warn(`[realtime] channel ${status}, falling back to polling`);
-        realtimeUp = false;
-        // Try to resubscribe after a delay (supabase-js also retries internally).
+        entry.up = false;
+        const up = refreshRealtimeUp();
+        if (up === 0) console.warn(`[realtime] channel ${status}, falling back to polling`);
+        // Retry this table after a delay (supabase-js also retries internally).
         if (status !== 'CLOSED') {
           setTimeout(() => {
-            if (!realtimeUp && channel) {
+            if (!entry.up) {
               try {
-                channel.subscribe();
+                entry.ch.subscribe();
               } catch {
                 /* ignored - polling keeps things working */
               }
@@ -120,7 +139,7 @@ function startRealtimeChannel() {
       }
     });
   } catch (err) {
-    console.warn('[realtime] could not start Supabase Realtime:', err.message);
+    console.warn(`[realtime] could not watch ${table}:`, err.message);
     realtimeUp = false;
   }
 }
