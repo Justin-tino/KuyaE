@@ -1,0 +1,25 @@
+# Render Blueprint - deploy the POS with one click.
+# 1. Push this project to a GitHub repository.
+# 2. In Render: New > Blueprint > select the repository.
+# 3. Render will ask for the values marked "sync: false" below.
+services:
+  - type: web
+    name: kuyae-pos
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install && npm run build:css
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TIMEZONE
+        value: Asia/Manila
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

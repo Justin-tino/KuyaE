@@ -1,0 +1,29 @@
+{
+  "name": "kuyae-pos",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Point of Sale system for Kuya E Tapsilogan - Node.js, Supabase, Tailwind CSS, deployable on Render free tier.",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "build:css": "tailwindcss -i src/styles/input.css -o public/css/tailwind.css --minify",
+    "watch:css": "tailwindcss -i src/styles/input.css -o public/css/tailwind.css --watch"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "bcryptjs": "^3.0.2",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "multer": "^2.0.1",
+    "tailwindcss": "^3.4.17",
+    "ws": "^8.18.1",
+    "zod": "^3.24.2"
+  }
+}
