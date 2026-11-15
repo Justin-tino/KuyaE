@@ -114,6 +114,21 @@
   .navlink {
     @apply flex h-14 items-center gap-3 rounded-xl px-4 text-lg font-semibold text-stone-600 transition-colors hover:bg-stone-200 hover:text-stone-900;
   }
+  /* App shell menu. On phones and tablets it is a slide-over drawer; from
+     tablet-landscape up it sits in the page row and collapses to nothing when
+     hidden, so the content grows into the space it gives back. */
+  #sidebar {
+    transition:
+      width 0.2s ease-out,
+      transform 0.2s ease-out,
+      border-right-width 0.2s ease-out;
+  }
+  @media (min-width: 1024px) {
+    #sidebar.sidebar-collapsed {
+      width: 0;
+      border-right-width: 0;
+    }
+  }
   .navlink-active {
     @apply bg-red-700 text-white hover:bg-red-700 hover:text-white;
   }

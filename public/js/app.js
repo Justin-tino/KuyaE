@@ -228,28 +228,31 @@ function renderShell() {
   const settings = state.settings || {};
   app.innerHTML = `
     <div class="app-height flex overflow-hidden">
-      <aside id="sidebar"
-        class="fixed inset-y-0 left-0 z-40 flex w-64 -translate-x-full flex-col border-r border-stone-200 bg-white transition-transform duration-200 lg:static lg:translate-x-0">
-        <div class="flex items-center gap-3 border-b border-stone-200 px-5 py-4">
-          <img src="/images/logo.png" alt="Logo" class="h-12 w-12 shrink-0 object-contain">
-          <div class="min-w-0">
-            <p id="shop-name" class="truncate text-lg font-extrabold leading-tight" title="${esc(settings.restaurantName || 'Tapsilogan')}">${esc(shortName(settings))}</p>
-            <p class="text-xs font-bold uppercase tracking-wider text-stone-400">Point of Sale</p>
+      <aside id="sidebar" aria-label="Main menu"
+        class="fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 -translate-x-full flex-col overflow-hidden border-r border-stone-200 bg-white lg:static lg:translate-x-0">
+        <div class="flex h-full w-64 shrink-0 flex-col">
+          <div class="flex items-center gap-3 border-b border-stone-200 px-5 py-4">
+            <img src="/images/logo.png" alt="Logo" class="h-12 w-12 shrink-0 object-contain">
+            <div class="min-w-0">
+              <p id="shop-name" class="truncate text-lg font-extrabold leading-tight" title="${esc(settings.restaurantName || 'Tapsilogan')}">${esc(shortName(settings))}</p>
+              <p class="text-xs font-bold uppercase tracking-wider text-stone-400">Point of Sale</p>
+            </div>
           </div>
-        </div>
-        <nav id="nav" class="flex-1 space-y-1 overflow-y-auto p-3"></nav>
-        <div class="border-stone-200 p-3" data-nav-footer>
-          <button type="button" id="signout" class="navlink w-full text-left">
-            ${icon('logout', 'w-6 h-6 shrink-0')}<span>Sign Out</span>
-          </button>
+          <nav id="nav" class="flex-1 space-y-1 overflow-y-auto p-3"></nav>
+          <div class="border-t border-stone-200 p-3">
+            <button type="button" id="signout" class="navlink w-full text-left">
+              ${icon('logout', 'w-6 h-6 shrink-0')}<span>Sign Out</span>
+            </button>
+          </div>
         </div>
       </aside>
 
-      <div id="sidebar-backdrop" class="fixed inset-0 z-30 hidden bg-stone-900/50 lg:hidden"></div>
+      <div id="sidebar-backdrop" class="fixed inset-0 z-30 hidden bg-stone-900/50"></div>
 
       <div class="flex min-w-0 flex-1 flex-col">
         <header class="z-20 flex h-16 shrink-0 items-center gap-3 border-b border-stone-200 bg-white px-4 sm:px-6">
-          <button type="button" id="menu-toggle" class="btn btn-ghost btn-sm lg:hidden" aria-label="Open menu">
+          <button type="button" id="menu-toggle" class="btn btn-ghost btn-sm" aria-label="Show or hide the menu"
+            aria-controls="sidebar" aria-expanded="true">
             ${icon('menu', 'w-6 h-6')}
           </button>
           <h1 id="page-title" class="truncate text-xl font-extrabold"></h1>
@@ -258,10 +261,6 @@ function renderShell() {
               <span class="conn-dot"></span><span class="conn-label">Offline</span>
             </span>
             <span data-clock class="hidden text-base font-semibold text-stone-500 md:inline"></span>
-            <button type="button" id="signout-icon" class="btn btn-ghost hidden btn-sm h-9 w-9 px-0 sm:h-10 sm:w-10" title="Sign Out"
-              aria-label="Sign Out">
-              ${icon('logout', 'w-5 h-5 sm:w-6 sm:h-6')}
-            </button>
             <button type="button" id="account" class="btn btn-ghost btn-sm">
               ${icon('user', 'w-6 h-6')}<span class="hidden font-bold sm:inline">${esc(state.user.fullName)}</span>
             </button>
@@ -275,32 +274,42 @@ function renderShell() {
 
   const sidebar = document.getElementById('sidebar');
   const backdrop = document.getElementById('sidebar-backdrop');
+  const menuToggle = document.getElementById('menu-toggle');
+  const wideScreen = window.matchMedia('(min-width: 1024px)');
 
-  const openSidebar = () => {
-    sidebar.classList.remove('-translate-x-full');
-    backdrop.classList.remove('hidden');
-  };
-  const closeSidebar = () => {
-    sidebar.classList.add('-translate-x-full');
-    backdrop.classList.add('hidden');
+  // Desktops start with the menu open beside the page; phones and tablets
+  // start with it tucked away, where it opens over the page instead.
+  let sidebarOpen = wideScreen.matches;
+
+  // On wide screens the menu is a column of the page row: hiding it collapses
+  // it to zero width so the header and the page take that space back. On
+  // phones it slides off-screen, so the page is already full width there.
+  function applySidebar() {
+    const wide = wideScreen.matches;
+    sidebar.classList.toggle('-translate-x-full', !sidebarOpen);
+    sidebar.classList.toggle('sidebar-collapsed', wide && !sidebarOpen);
+    backdrop.classList.toggle('hidden', wide || !sidebarOpen);
+    // A hidden menu must not swallow taps or hold keyboard focus.
+    sidebar.inert = !sidebarOpen;
+    menuToggle.setAttribute('aria-expanded', String(sidebarOpen));
+    menuToggle.setAttribute('aria-label', sidebarOpen ? 'Hide the menu' : 'Show the menu');
+  }
+
+  const setSidebar = (open) => {
+    sidebarOpen = open;
+    applySidebar();
   };
 
-  document.getElementById('menu-toggle').addEventListener('click', openSidebar);
-  backdrop.addEventListener('click', closeSidebar);
+  applySidebar();
+  menuToggle.addEventListener('click', () => setSidebar(!sidebarOpen));
+  backdrop.addEventListener('click', () => setSidebar(false));
   sidebar.addEventListener('click', (event) => {
-    if (event.target.closest('[data-nav]')) closeSidebar();
+    if (event.target.closest('[data-nav]') && !wideScreen.matches) setSidebar(false);
   });
-  const signOutButton = document.getElementById('signout');
-
-  // "Sign Out" lives in the header for roles whose only nav entry is the page
-  // they are on (like the cook's Kitchen) - it is an icon up top and the
-  // sidebar row disappears, which keeps the whole board usable on a tablet.
-  const hasRealNav = NAV.some((item) => item.roles.includes(state.user.role) && item.route !== location.hash);
-  document.querySelector('[data-nav-footer]').hidden = !hasRealNav;
-  const signOutIcon = document.getElementById('signout-icon');
-  signOutIcon.hidden = hasRealNav;
-  if (signOutButton) signOutButton.addEventListener('click', signOut);
-  signOutIcon.addEventListener('click', signOut);
+  // Crossing the breakpoint turns the menu into the other kind of menu, so
+  // reset it to that layout's default instead of leaving it off-screen.
+  wideScreen.addEventListener('change', (event) => setSidebar(event.matches));
+  document.getElementById('signout').addEventListener('click', signOut);
   document.getElementById('account').addEventListener('click', openAccountModal);
 
   offSettingsEvents = onEvent(async (event) => {
