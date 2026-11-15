@@ -284,8 +284,12 @@ function paneHtml({ key, title, iconName, count, badgeClass, body, empty }) {
         <h2 class="panel-title">${icon(iconName, 'w-4 h-4')} ${esc(title)}</h2>
         <span class="badge ${badgeClass} px-2 py-0.5 text-[11px] sm:text-xs">${count}</span>
       </div>
-      <div data-board="${key}" class="min-h-0 flex-1 space-y-2 overflow-y-auto p-2 sm:p-2.5">
-        ${count ? body : `<div class="rounded-xl border border-dashed border-stone-200">${empty}</div>`}
+      <div data-board="${key}" class="min-h-0 flex-1 overflow-y-auto p-2 sm:p-2.5">
+        ${
+          count
+            ? `<div class="grid grid-cols-1 gap-2 sm:gap-2.5 md:grid-cols-2">${body}</div>`
+            : `<div class="rounded-xl border border-dashed border-stone-200">${empty}</div>`
+        }
       </div>
     </section>`;
 }
@@ -339,11 +343,11 @@ function cardHtml(order, { queue, isNext = false }) {
       <div class="mt-2">
         ${
           queue
-            ? `<button type="button" data-start="${order.id}" class="btn btn-md btn-primary h-10 w-full text-sm sm:h-11 sm:text-base">
-                ${icon('fire', 'w-4 h-4')} Start Cooking
+            ? `<button type="button" data-start="${order.id}" class="btn btn-md btn-primary h-9 w-full text-[11px] sm:h-10">
+                ${icon('fire', 'h-3.5 w-3.5 sm:h-4 sm:w-4')} Start Cooking
               </button>`
-            : `<button type="button" data-serve="${order.id}" class="btn btn-md btn-success h-10 w-full text-sm sm:h-11 sm:text-base">
-                ${icon('check', 'w-4 h-4')} Done &amp; Served
+            : `<button type="button" data-serve="${order.id}" class="btn btn-md btn-success h-9 w-full text-[11px] sm:h-10">
+                ${icon('check', 'h-3.5 w-3.5 sm:h-4 sm:w-4')} Done & Served
               </button>`
         }
       </div>
