@@ -85,7 +85,7 @@ function updateConnectionPill(status) {
 function renderBootScreen() {
   screen = 'boot';
   app.innerHTML = `
-    <div class="flex min-h-screen flex-col items-center justify-center gap-6 p-6">
+    <div class="flex min-app-height flex-col items-center justify-center gap-6 p-6">
       <img src="/images/logo.png" alt="Logo" class="h-28 w-28 object-contain">
       <div class="flex items-center gap-3 text-lg font-bold text-stone-500">
         ${spinner('w-7 h-7 text-red-700')}
@@ -100,7 +100,7 @@ function renderBootScreen() {
 function renderBootError(message) {
   screen = 'boot';
   app.innerHTML = `
-    <div class="flex min-h-screen items-center justify-center p-4">
+    <div class="flex min-app-height items-center justify-center p-4">
       <div class="card w-full max-w-md p-8 text-center">
         <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-red-100 text-red-700">${icon('alert', 'w-8 h-8')}</div>
         <h1 class="mt-4 text-xl font-extrabold">Cannot start the system</h1>
@@ -227,7 +227,7 @@ async function enterApp(user) {
 function renderShell() {
   const settings = state.settings || {};
   app.innerHTML = `
-    <div class="flex min-h-screen">
+    <div class="app-height flex overflow-hidden">
       <aside id="sidebar"
         class="fixed inset-y-0 left-0 z-40 flex w-64 -translate-x-full flex-col border-r border-stone-200 bg-white transition-transform duration-200 lg:static lg:translate-x-0">
         <div class="flex items-center gap-3 border-b border-stone-200 px-5 py-4">
@@ -248,7 +248,7 @@ function renderShell() {
       <div id="sidebar-backdrop" class="fixed inset-0 z-30 hidden bg-stone-900/50 lg:hidden"></div>
 
       <div class="flex min-w-0 flex-1 flex-col">
-        <header class="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-stone-200 bg-white px-4 sm:px-6">
+        <header class="z-20 flex h-16 shrink-0 items-center gap-3 border-b border-stone-200 bg-white px-4 sm:px-6">
           <button type="button" id="menu-toggle" class="btn btn-ghost btn-sm lg:hidden" aria-label="Open menu">
             ${icon('menu', 'w-6 h-6')}
           </button>
@@ -263,7 +263,7 @@ function renderShell() {
             </button>
           </div>
         </header>
-        <main id="view" class="flex-1 p-4 sm:p-6"></main>
+        <main id="view" class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6"></main>
       </div>
     </div>`;
 
@@ -481,6 +481,9 @@ async function mountView() {
     currentCleanup = null;
   }
   viewEl.innerHTML = '';
+  // The page area is its own scroll container now, so a new screen always
+  // starts at the top instead of inheriting the previous page's position.
+  viewEl.scrollTop = 0;
 
   try {
     const cleanup = await route.view.mount(viewEl);

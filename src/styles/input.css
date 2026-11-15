@@ -117,6 +117,79 @@
   .navlink-active {
     @apply bg-red-700 text-white hover:bg-red-700 hover:text-white;
   }
+  /* Sign-in, setup and first-admin screens. The card tightens up on short
+     screens (tablets in landscape, or with the browser bar showing) so the
+     bottom of the form is never cut off. */
+  .auth-body {
+    padding: 2rem 1.5rem 4rem;
+  }
+  .auth-logo {
+    width: 5rem;
+    height: 5rem;
+  }
+  .auth-title {
+    margin-top: 1rem;
+    font-size: 1.875rem;
+    line-height: 2.25rem;
+  }
+  .auth-form {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1.75rem;
+  }
+  .auth-foot {
+    margin-top: 1.75rem;
+  }
+  @media (min-width: 640px) {
+    .auth-body {
+      padding: 2rem 2.5rem 5rem;
+    }
+    .auth-logo {
+      width: 6rem;
+      height: 6rem;
+    }
+  }
+  @media (min-width: 640px) and (max-height: 720px) {
+    .auth-body {
+      padding: 1.5rem 2.5rem 3.5rem;
+    }
+    .auth-logo {
+      width: 4.25rem;
+      height: 4.25rem;
+    }
+    .auth-title {
+      margin-top: 0.75rem;
+      font-size: 1.5rem;
+      line-height: 1.9rem;
+    }
+    .auth-form {
+      gap: 0.75rem;
+      margin-top: 1.25rem;
+    }
+    .auth-foot {
+      margin-top: 1.25rem;
+    }
+  }
+  @media (min-width: 640px) and (max-height: 620px) {
+    .auth-body {
+      padding: 1rem 2.5rem 2.5rem;
+    }
+    .auth-logo {
+      width: 3.25rem;
+      height: 3.25rem;
+    }
+    .auth-title {
+      font-size: 1.25rem;
+      line-height: 1.6rem;
+    }
+    .auth-form {
+      gap: 0.6rem;
+      margin-top: 0.9rem;
+    }
+    .auth-foot {
+      margin-top: 0.9rem;
+    }
+  }
   .chip {
     @apply inline-flex h-11 items-center whitespace-nowrap rounded-full border border-stone-300 bg-white px-4 font-semibold text-stone-700 transition-colors hover:bg-stone-50;
   }
@@ -225,6 +298,25 @@
 }
 
 @layer utilities {
+  /* Size full-screen layouts against the *visible* viewport. A tablet
+     browser keeps its address bar on screen, which makes 100vh taller than
+     the usable area - that is what pushed the bottom of the page below the
+     screen. dvh follows the visible area; 100vh stays as an old fallback. */
+  .app-height {
+    height: 100vh;
+  }
+  .min-app-height {
+    min-height: 100vh;
+  }
+  @supports (height: 100dvh) {
+    .app-height {
+      height: 100dvh;
+    }
+    .min-app-height {
+      min-height: 100dvh;
+    }
+  }
+
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }
@@ -267,19 +359,13 @@
     animation: shimmer 1.3s infinite;
   }
   /* Full-height work area used by the kitchen board and the order counter.
-     The shell header (4rem) plus the page padding (3rem) are removed, and dvh
-     keeps the bottom edge visible while mobile browser bars slide away.
+     The shell already gives the page a definite height, so 100% is exactly
+     the space under the header inside the page padding - it can never spill
+     below the screen, whatever the tablet's browser bars are doing.
      Below tablet size the page scrolls normally. */
   @media (min-width: 768px) {
     .workfit {
-      height: calc(100vh - 7rem);
-    }
-  }
-  @supports (height: 100dvh) {
-    @media (min-width: 768px) {
-      .workfit {
-        height: calc(100dvh - 7rem);
-      }
+      height: 100%;
     }
   }
 

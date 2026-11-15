@@ -44,11 +44,11 @@ function cardWave() {
 
 function pageShell(cardWidth, innerHtml) {
   return `
-    <div class="relative flex min-h-screen items-center justify-center bg-stone-100 p-4 sm:p-8">
+    <div class="min-app-height relative flex items-center justify-center bg-stone-100 p-4 sm:p-6">
       ${backgroundDecor()}
       <div class="relative z-10 w-full ${cardWidth} overflow-hidden rounded-3xl border border-stone-200/60 bg-white shadow-2xl shadow-stone-900/10">
         ${cardWave()}
-        <div class="relative px-6 pb-16 pt-8 sm:px-10 sm:pb-20">${innerHtml}</div>
+        <div class="auth-body relative">${innerHtml}</div>
       </div>
     </div>`;
 }
@@ -58,10 +58,10 @@ function brandHeader(status, subtitle) {
     <div class="text-center">
       <div class="flex items-center justify-center gap-3">
         <span class="h-0.5 w-10 rounded-full bg-red-600 sm:w-14"></span>
-        <img src="/images/logo.png" alt="" class="h-20 w-20 object-contain sm:h-24 sm:w-24">
+        <img src="/images/logo.png" alt="" class="auth-logo object-contain">
         <span class="h-0.5 w-10 rounded-full bg-red-600 sm:w-14"></span>
       </div>
-      <h1 class="mt-4 text-3xl font-extrabold tracking-tight text-stone-900">${esc(appName(status))}</h1>
+      <h1 class="auth-title font-extrabold tracking-tight text-stone-900">${esc(appName(status))}</h1>
       ${subtitle ? `<p class="mt-1 text-lg text-stone-500">${esc(subtitle)}</p>` : ''}
       <span class="mx-auto mt-3 block h-1 w-14 rounded-full bg-red-600"></span>
     </div>`;
@@ -258,7 +258,7 @@ export function renderLoginPage(container, status, onLoggedIn) {
     `
       ${brandHeader(status, 'Sign in to continue')}
 
-      <form id="login-form" class="mt-7 space-y-4" novalidate>
+      <form id="login-form" class="auth-form" novalidate>
         <div>
           ${fieldLabel('username', 'user', 'Username')}
           <input id="username" name="username" class="input input-lg" autocomplete="username" autocapitalize="none"
@@ -282,7 +282,7 @@ export function renderLoginPage(container, status, onLoggedIn) {
         </button>
       </form>
 
-      <div class="mt-7 flex items-center justify-center gap-3">
+      <div class="auth-foot flex items-center justify-center gap-3">
         <span class="h-px w-8 shrink-0 rounded-full bg-red-600/60"></span>
         <p class="text-center text-sm text-stone-600">Forgot your password? Ask the administrator to reset it.</p>
         <span class="h-px w-8 shrink-0 rounded-full bg-red-600/60"></span>
