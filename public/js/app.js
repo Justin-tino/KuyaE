@@ -238,7 +238,7 @@ function renderShell() {
           </div>
         </div>
         <nav id="nav" class="flex-1 space-y-1 overflow-y-auto p-3"></nav>
-        <div class="border-t border-stone-200 p-3">
+        <div class="border-stone-200 p-3" data-nav-footer>
           <button type="button" id="signout" class="navlink w-full text-left">
             ${icon('logout', 'w-6 h-6 shrink-0')}<span>Sign Out</span>
           </button>
@@ -258,6 +258,10 @@ function renderShell() {
               <span class="conn-dot"></span><span class="conn-label">Offline</span>
             </span>
             <span data-clock class="hidden text-base font-semibold text-stone-500 md:inline"></span>
+            <button type="button" id="signout-icon" class="btn btn-ghost hidden btn-sm h-9 w-9 px-0 sm:h-10 sm:w-10" title="Sign Out"
+              aria-label="Sign Out">
+              ${icon('logout', 'w-5 h-5 sm:w-6 sm:h-6')}
+            </button>
             <button type="button" id="account" class="btn btn-ghost btn-sm">
               ${icon('user', 'w-6 h-6')}<span class="hidden font-bold sm:inline">${esc(state.user.fullName)}</span>
             </button>
@@ -286,7 +290,17 @@ function renderShell() {
   sidebar.addEventListener('click', (event) => {
     if (event.target.closest('[data-nav]')) closeSidebar();
   });
-  document.getElementById('signout').addEventListener('click', signOut);
+  const signOutButton = document.getElementById('signout');
+
+  // "Sign Out" lives in the header for roles whose only nav entry is the page
+  // they are on (like the cook's Kitchen) - it is an icon up top and the
+  // sidebar row disappears, which keeps the whole board usable on a tablet.
+  const hasRealNav = NAV.some((item) => item.roles.includes(state.user.role) && item.route !== location.hash);
+  document.querySelector('[data-nav-footer]').hidden = !hasRealNav;
+  const signOutIcon = document.getElementById('signout-icon');
+  signOutIcon.hidden = hasRealNav;
+  if (signOutButton) signOutButton.addEventListener('click', signOut);
+  signOutIcon.addEventListener('click', signOut);
   document.getElementById('account').addEventListener('click', openAccountModal);
 
   offSettingsEvents = onEvent(async (event) => {
