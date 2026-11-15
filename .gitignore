@@ -6,3 +6,7 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 render-deploy-notes.txt
+
+# Local UI preview harness (offline mock of the API)
+public/__preview.html
+public/__preview-mock.js

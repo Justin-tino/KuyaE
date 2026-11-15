@@ -1,4 +1,4 @@
-// Cashier/Admin: order history for the day.
+// Cashier/Admin: order history with a custom date range.
 
 import { api } from '../api.js';
 import { icon } from '../icons.js';
@@ -9,6 +9,7 @@ import {
   money,
   toast,
   fmtTime,
+  fmtDayLabel,
   todayLocalStr,
   renderPreservingFocus,
   debounce,
@@ -17,8 +18,11 @@ import {
   pageLoader,
 } from '../ui.js';
 
+const PAGE_SIZE = 50;
+
 const filters = {
-  date: todayLocalStr(),
+  from: todayLocalStr(),
+  to: todayLocalStr(),
   status: '',
   payment: '',
   search: '',
@@ -27,6 +31,7 @@ const filters = {
 let orders = [];
 let total = 0;
 let loading = true;
+let loadingMore = false;
 let rootEl = null;
 
 const STATUS_CHIPS = [
@@ -62,19 +67,25 @@ export async function mount(container) {
   };
 }
 
+function buildParams(offset, limit) {
+  const params = new URLSearchParams();
+  params.set('from', filters.from);
+  params.set('to', filters.to);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.payment) params.set('payment', filters.payment);
+  if (filters.search.trim()) params.set('search', filters.search.trim());
+  params.set('limit', String(limit));
+  params.set('offset', String(offset));
+  return params;
+}
+
 async function refresh(quiet) {
   if (!quiet) {
     loading = true;
     render();
   }
   try {
-    const params = new URLSearchParams();
-    params.set('from', filters.date);
-    params.set('to', filters.date);
-    if (filters.status) params.set('status', filters.status);
-    if (filters.payment) params.set('payment', filters.payment);
-    if (filters.search.trim()) params.set('search', filters.search.trim());
-    const data = await api(`/orders?${params.toString()}`);
+    const data = await api(`/orders?${buildParams(0, PAGE_SIZE).toString()}`);
     orders = data.orders || [];
     total = data.total || 0;
     loading = false;
@@ -86,15 +97,35 @@ async function refresh(quiet) {
   }
 }
 
+/** Loads the next page of the current range and appends it to the list. */
+async function loadMore() {
+  if (loadingMore || loading || orders.length >= total) return;
+  loadingMore = true;
+  render(true);
+  try {
+    const data = await api(`/orders?${buildParams(orders.length, PAGE_SIZE).toString()}`);
+    orders = orders.concat(data.orders || []);
+    total = data.total || total;
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+  loadingMore = false;
+  render(true);
+}
+
 function render(quiet) {
   if (!rootEl) return;
   const html = `
     <div class="space-y-4">
       <div class="card p-4">
         <div class="flex flex-col gap-3 lg:flex-row lg:items-end">
-          <div class="w-full lg:w-56">
-            <label class="label" for="order-date">Date</label>
-            <input id="order-date" type="date" class="input" value="${esc(filters.date)}">
+          <div>
+            <label class="label" for="order-from">From</label>
+            <input id="order-from" type="date" class="input" value="${esc(filters.from)}">
+          </div>
+          <div>
+            <label class="label" for="order-to">To</label>
+            <input id="order-to" type="date" class="input" value="${esc(filters.to)}">
           </div>
           <div class="min-w-0 flex-1">
             <label class="label" for="order-search">Search</label>
@@ -120,12 +151,12 @@ function render(quiet) {
       </div>
 
       <div class="card overflow-hidden">
-        <div class="flex items-center justify-between border-b border-stone-200 px-5 py-3">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 px-5 py-3">
           <p class="font-bold text-stone-600">${loading ? 'Loading orders...' : `${total} order${total === 1 ? '' : 's'} found`}</p>
-          <p class="text-sm font-semibold text-stone-500">Newest first</p>
+          <p class="text-sm font-semibold text-stone-500">${esc(rangeLabel())} - newest first</p>
         </div>
         <div class="overflow-x-auto">
-          <table class="w-full min-w-[760px]">
+          <table class="w-full min-w-[640px]">
             <thead class="bg-stone-50">
               <tr>
                 <th class="th">Order</th>
@@ -143,11 +174,25 @@ function render(quiet) {
                   ? tableLoadingRow(7, 'Loading orders...')
                   : orders.length
                   ? orders.map(rowHtml).join('')
-                  : `<tr><td colspan="7">${emptyState('receipt', 'No orders found', 'Try another date or clear the filters.')}</td></tr>`
+                  : `<tr><td colspan="7">${emptyState('receipt', 'No orders found', 'Try another date range or clear the filters.')}</td></tr>`
               }
             </tbody>
           </table>
         </div>
+        ${
+          !loading && orders.length
+            ? `<div class="flex flex-wrap items-center justify-between gap-3 border-t border-stone-200 px-5 py-3">
+                <p class="text-sm font-semibold text-stone-500">Showing ${orders.length} of ${total}</p>
+                ${
+                  orders.length < total
+                    ? `<button type="button" data-action="more" class="btn btn-md btn-secondary" ${loadingMore ? 'disabled' : ''}>
+                        ${loadingMore ? 'Loading...' : `Load more (${total - orders.length} left)`}
+                      </button>`
+                    : ''
+                }
+              </div>`
+            : ''
+        }
       </div>
     </div>`;
 
@@ -180,6 +225,11 @@ function rowHtml(order) {
     </tr>`;
 }
 
+function rangeLabel() {
+  if (filters.from === filters.to) return fmtDayLabel(filters.from) + ', ' + filters.from.slice(0, 4);
+  return `${fmtDayLabel(filters.from)}, ${filters.from.slice(0, 4)} to ${fmtDayLabel(filters.to)}, ${filters.to.slice(0, 4)}`;
+}
+
 function handleClick(event) {
   const printButton = event.target.closest('[data-print]');
   if (printButton) {
@@ -210,6 +260,11 @@ function handleClick(event) {
     return;
   }
 
+  if (event.target.closest('[data-action="more"]')) {
+    loadMore();
+    return;
+  }
+
   const actionButton = event.target.closest('[data-action="refresh"]');
   if (actionButton) refresh(false);
 }
@@ -224,8 +279,14 @@ function handleInput(event) {
 const debouncedSearch = debounce(() => refresh(true), 350);
 
 function handleChange(event) {
-  if (event.target.id === 'order-date') {
-    filters.date = event.target.value || todayLocalStr();
+  if (event.target.id === 'order-from') {
+    filters.from = event.target.value || todayLocalStr();
+    if (filters.to < filters.from) filters.to = filters.from;
+    refresh(false);
+  }
+  if (event.target.id === 'order-to') {
+    filters.to = event.target.value || todayLocalStr();
+    if (filters.to < filters.from) filters.from = filters.to;
     refresh(false);
   }
 }

@@ -14,6 +14,8 @@ export async function api(path, options = {}) {
   const fetchOptions = {
     method,
     credentials: 'same-origin',
+    // Live screens poll these endpoints - never let the browser serve a stale copy.
+    cache: 'no-store',
     headers: { 'X-Requested-With': 'kuyae-pos' },
   };
   if (formData) {

@@ -18,7 +18,7 @@ Runs on the Render free tier.
 | --- | --- |
 | **Cashier** | New Order, Pending Payments, Orders |
 | **Kitchen** | Kitchen board only |
-| **Admin** | Everything: Sales Dashboard, New Order, Pending Payments, Orders, Kitchen, Menu, Users, Audit Logs, Sales Reports, Settings |
+| **Admin** | Sales Dashboard, Orders, Menu, Users, Audit Logs, Sales Reports |
 
 **Cashier - New Order**
 
@@ -44,14 +44,15 @@ Runs on the Render free tier.
 
 **Admin**
 
-- **Sales Dashboard**: today/yesterday/last 7 days/this month/custom range, gross, collected,
-  uncollected, average order, 7-day bar chart, payment split, order types, top items, recent orders.
+- **Sales Dashboard**: a custom date range (from/to), gross, collected, uncollected, average order,
+  payment split, order types, top items and the latest orders.
+- **Orders**: every order in a custom date range (today by default), newest first, with status and
+  payment filters, a search box and a load-more button.
 - **Menu**: add/edit/delete items, photo upload, price, category, description, available/unavailable
   switch (unavailable items cannot be ordered).
 - **Users**: create staff, change role, reset password, enable/disable, delete.
 - **Audit Logs**: every sign-in, failed sign-in, order, payment, menu and user change, filterable.
-- **Sales Reports**: printable A4 report and CSV export.
-- **Settings**: restaurant name, address, phone and receipt footer (used on receipts and reports).
+- **Sales Reports**: printable A4 report for any custom date range.
 
 ---
 
@@ -174,7 +175,12 @@ warning-only random secret).
 
 - **Print Report** produces an A4 report with summary, daily breakdown, top items, staff
   performance and the order list.
-- **Export CSV** downloads the order list for spreadsheets. It opens correctly in Excel (UTF-8 BOM).
+- Both the dashboard and the reports screen use a custom date range (from/to). The range cannot be
+  longer than 92 days.
+- Every order inside the range is counted: the report pages through the database instead of taking
+  the first rows only, and every total (gross, cash, online, unpaid, daily, staff, items) adds up to
+  the same gross sales. A range with more than 20,000 orders is refused - split it into shorter
+  periods.
 
 ### Money
 
@@ -289,4 +295,4 @@ dates use it.
 
 Use the Supabase dashboard (**Database > Backups**) or `pg_dump` with the connection string from
 **Project Settings > Database**. Menu photos live in **Storage > menus** and can be downloaded
-from the dashboard. Export a CSV sales report regularly as a simple off-site copy.
+from the dashboard. Take a database backup regularly as a simple off-site copy.

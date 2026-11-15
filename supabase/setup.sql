@@ -181,8 +181,12 @@ for each row execute function public.set_updated_at();
 --   Creates the order and its items in a single transaction. Prices and
 --   totals are always taken from the menu table (never trusted from the
 --   browser) and payment rules are validated here as well.
+--   Returns { order: <row>, items: [<rows>] } so the server can answer the
+--   cashier in a single round trip (no follow-up fetch needed).
 -- ---------------------------------------------------------------------------
-create or replace function public.create_pos_order(
+drop function if exists public.create_pos_order(
+  text, text, text, jsonb, text, text, numeric, text, uuid, text);
+create function public.create_pos_order(
   p_customer_name text,
   p_order_type text,
   p_notes text,
@@ -194,13 +198,14 @@ create or replace function public.create_pos_order(
   p_created_by uuid,
   p_auto_name text
 )
-returns public.orders
+returns jsonb
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
   v_order public.orders;
+  v_items jsonb;
   v_menu public.menu_items;
   v_item jsonb;
   v_qty integer;
@@ -256,8 +261,9 @@ begin
       v_change := v_cash - v_subtotal;
     elsif p_payment_method = 'online' then
       v_method := 'online';
-      v_cash := v_subtotal;
-      v_change := 0;
+      -- Online payments have no cash tender or change (matches POST /orders/:id/pay).
+      v_cash := null;
+      v_change := null;
     else
       raise exception 'Choose a payment method';
     end if;
@@ -305,7 +311,12 @@ begin
   from jsonb_array_elements(p_items) with ordinality as elem (item, pos)
   join menu_items m on m.id = (elem.item ->> 'menu_item_id')::uuid;
 
-  return v_order;
+  select coalesce(jsonb_agg(to_jsonb(oi) order by oi.line_no), '[]'::jsonb)
+    into v_items
+    from order_items oi
+    where oi.order_id = v_order.id;
+
+  return jsonb_build_object('order', to_jsonb(v_order), 'items', v_items);
 end;
 $$;
 

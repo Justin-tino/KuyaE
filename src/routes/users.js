@@ -7,7 +7,7 @@ const { getClient, friendlyDbError } = require('../supabase');
 const { auditLog } = require('../lib/audit');
 const { cleanText, firstZodError, isUuid } = require('../lib/helpers');
 const { serializeUser } = require('../lib/serialize');
-const { requireAuth, requireRole, revokeUserSessions } = require('../middleware/auth');
+const { requireAuth, requireRole, revokeUserSessions, flushSessionCache } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -99,7 +99,7 @@ router.post('/', requireAuth, requireRole('admin'), async (req, res, next) => {
       return res.status(500).json({ error: friendlyDbError(error) });
     }
 
-    await auditLog(req, 'user_create', 'user', data.id, {
+    auditLog(req, 'user_create', 'user', data.id, {
       username: data.username,
       fullName: data.full_name,
       role: data.role,
@@ -175,11 +175,12 @@ router.patch('/:id', requireAuth, requireRole('admin'), async (req, res, next) =
     }
 
     // Security: kick out sessions when the account is disabled or password reset.
+    // Awaited on purpose: the disabled account must lose access immediately.
     if (parsed.data.isActive === false || passwordChanged) {
-      await revokeUserSessions(sb, id, null);
+      await revokeUserSessions(sb, id, null); // also flushes the session cache
     }
 
-    await auditLog(req, 'user_update', 'user', id, {
+    auditLog(req, 'user_update', 'user', id, {
       username: data.username,
       changed: Object.keys(updates).filter((k) => k !== 'password_hash'),
       passwordReset: passwordChanged,
@@ -213,8 +214,10 @@ router.delete('/:id', requireAuth, requireRole('admin'), async (req, res, next) 
 
     const { error } = await sb.from('users').delete().eq('id', id);
     if (error) return res.status(500).json({ error: friendlyDbError(error) });
+    // The database cascades the session rows; drop their cached lookups too.
+    flushSessionCache();
 
-    await auditLog(req, 'user_delete', 'user', id, {
+    auditLog(req, 'user_delete', 'user', id, {
       username: target.username,
       fullName: target.full_name,
       role: target.role,

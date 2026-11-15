@@ -6,6 +6,42 @@ const { getClient } = require('../supabase');
 
 const SESSION_MS = config.sessionHours * 60 * 60 * 1000;
 
+// Every API request used to look the session up in the database, which added
+// one round trip to every single screen and button. A short-lived in-memory
+// cache keeps screens fast without weakening security: every path that
+// revokes sessions flushes the cache, so a signed-out, disabled or
+// password-reset device is rejected on its very next request.
+const SESSION_CACHE_TTL_MS = 30000;
+const sessionCache = new Map(); // tokenHash -> { user, sessionExpiresAt, cachedAt }
+
+function cacheGet(tokenHash) {
+  const entry = sessionCache.get(tokenHash);
+  if (!entry) return null;
+  const now = Date.now();
+  if (now - entry.cachedAt > SESSION_CACHE_TTL_MS || new Date(entry.sessionExpiresAt).getTime() < now) {
+    sessionCache.delete(tokenHash);
+    return null;
+  }
+  return entry;
+}
+
+function cachePut(user) {
+  sessionCache.set(user.tokenHash, {
+    user: { ...user },
+    sessionExpiresAt: user.sessionExpiresAt,
+    cachedAt: Date.now(),
+  });
+}
+
+/** Drop every cached session lookup (called whenever sessions are revoked). */
+function flushSessionCache() {
+  sessionCache.clear();
+}
+
+function evictSessionCache(tokenHash) {
+  sessionCache.delete(tokenHash);
+}
+
 function hashToken(token) {
   return crypto.createHmac('sha256', config.sessionSecret).update(token).digest('hex');
 }
@@ -50,12 +86,20 @@ async function attachUser(req, res, next) {
   try {
     const token = req.cookies ? req.cookies[config.cookieName] : null;
     if (!token) return next();
+    const tokenHash = hashToken(token);
+
+    const cached = cacheGet(tokenHash);
+    if (cached) {
+      req.user = { ...cached.user, sessionExpiresAt: cached.sessionExpiresAt, tokenHash };
+      return next();
+    }
+
     const sb = getClient();
     if (!sb) return next();
     const { data, error } = await sb
       .from('sessions')
       .select('expires_at, user:users!sessions_user_id_fkey(id, username, full_name, role, is_active)')
-      .eq('token_hash', hashToken(token))
+      .eq('token_hash', tokenHash)
       .gt('expires_at', new Date().toISOString())
       .maybeSingle();
     if (error) return next(error);
@@ -66,8 +110,9 @@ async function attachUser(req, res, next) {
         fullName: data.user.full_name,
         role: data.user.role,
         sessionExpiresAt: data.expires_at,
-        tokenHash: hashToken(token),
+        tokenHash,
       };
+      cachePut(req.user);
     }
     next();
   } catch (err) {
@@ -125,6 +170,9 @@ async function revokeUserSessions(sb, userId, keepTokenHash) {
   let query = sb.from('sessions').delete().eq('user_id', userId);
   if (keepTokenHash) query = query.neq('token_hash', keepTokenHash);
   await query;
+  // Signed-out devices must be rejected on their next request, not after the
+  // cache TTL. Flushing is cheap (a couple of entries) and always safe.
+  flushSessionCache();
 }
 
 module.exports = {
@@ -137,4 +185,6 @@ module.exports = {
   requireRole,
   csrfProtection,
   revokeUserSessions,
+  flushSessionCache,
+  evictSessionCache,
 };

@@ -8,6 +8,7 @@ const { cleanText, firstZodError, isUuid, toCents, fromCents, clampInt, escapeLi
 const { serializeOrder, ORDER_SELECT } = require('../lib/serialize');
 const { todayStr, dayRange, isValidDateStr, daysBetween } = require('../lib/tz');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { publishChange, publishOrderCreated } = require('../realtime');
 
 const router = express.Router();
 
@@ -134,28 +135,31 @@ router.get('/pending-payments', requireAuth, requireRole('cashier', 'admin'), as
 router.get('/kitchen', requireAuth, requireRole('kitchen', 'admin', 'cashier'), async (req, res, next) => {
   try {
     const sb = getClient();
-    const { data, error } = await sb
-      .from('orders')
-      .select(ORDER_SELECT)
-      .in('status', ['pending', 'preparing'])
-      .order('order_number', { ascending: true })
-      .limit(200);
-    if (error) return res.status(503).json({ error: friendlyDbError(error) });
-
     const { fromIso, toIso } = dayRange(todayStr(), todayStr());
-    const { data: servedToday } = await sb
-      .from('orders')
-      .select(ORDER_SELECT)
-      .eq('status', 'served')
-      .gte('served_at', fromIso)
-      .lt('served_at', toIso)
-      .order('served_at', { ascending: false })
-      .limit(100);
+    // One round trip, not two: the board and the served list load together.
+    const [active, served] = await Promise.all([
+      sb
+        .from('orders')
+        .select(ORDER_SELECT)
+        .in('status', ['pending', 'preparing'])
+        .order('order_number', { ascending: true })
+        .limit(200),
+      sb
+        .from('orders')
+        .select(ORDER_SELECT)
+        .eq('status', 'served')
+        .gte('served_at', fromIso)
+        .lt('served_at', toIso)
+        .order('served_at', { ascending: false })
+        .limit(100),
+    ]);
+    if (active.error) return res.status(503).json({ error: friendlyDbError(active.error) });
+    if (served.error) return res.status(503).json({ error: friendlyDbError(served.error) });
 
-    const orders = (data || []).map(serializeOrder);
+    const orders = (active.data || []).map(serializeOrder);
     return res.json({
       orders,
-      servedToday: (servedToday || []).map(serializeOrder),
+      servedToday: (served.data || []).map(serializeOrder),
     });
   } catch (err) {
     return next(err);
@@ -195,15 +199,21 @@ router.post('/', requireAuth, requireRole('cashier', 'admin'), async (req, res, 
       quantity,
     }));
 
-    // Suggested auto name: "Customer N" based on today's order count.
-    const { fromIso, toIso } = dayRange(todayStr(), todayStr());
+    // Suggested auto name: "Customer N" based on today's order count. The
+    // cashier almost always sends a name (the screen pre-fills it), so the
+    // counting round trip is only paid when it is actually needed.
+    let autoName = null;
+    if (!body.customerName) {
+      const { fromIso, toIso } = dayRange(todayStr(), todayStr());
+      const sb = getClient();
+      const { count } = await sb
+        .from('orders')
+        .select('*', { count: 'exact', head: true })
+        .gte('created_at', fromIso)
+        .lt('created_at', toIso);
+      autoName = `Customer ${(count || 0) + 1}`;
+    }
     const sb = getClient();
-    const { count } = await sb
-      .from('orders')
-      .select('*', { count: 'exact', head: true })
-      .gte('created_at', fromIso)
-      .lt('created_at', toIso);
-    const autoName = `Customer ${(count || 0) + 1}`;
 
     const { data: created, error } = await sb.rpc('create_pos_order', {
       p_customer_name: body.customerName || '',
@@ -217,7 +227,7 @@ router.post('/', requireAuth, requireRole('cashier', 'admin'), async (req, res, 
         : null,
       p_reference: body.payment.reference || '',
       p_created_by: req.user.id,
-      p_auto_name: autoName,
+      p_auto_name: autoName || '',
     });
     if (error) {
       const message = String(error.message || '').replace(/^P\d{4}:\s*/, '');
@@ -227,16 +237,27 @@ router.post('/', requireAuth, requireRole('cashier', 'admin'), async (req, res, 
       return res.status(503).json({ error: friendlyDbError(error) });
     }
 
-    const row = Array.isArray(created) ? created[0] : created;
-    const { data: full, error: fetchError } = await sb
-      .from('orders')
-      .select(ORDER_SELECT)
-      .eq('id', row.id)
-      .single();
-    if (fetchError) return res.status(500).json({ error: friendlyDbError(fetchError) });
+    // The RPC returns { order, items } - the full receipt in a single round
+    // trip. (Older database setups return the bare order row; then one
+    // follow-up fetch fills in the items.)
+    const payload = Array.isArray(created) ? created[0] : created;
+    let order = null;
+    if (payload && payload.order && Array.isArray(payload.items)) {
+      order = serializeOrder({ ...payload.order, items: payload.items });
+    }
+    if (!order) {
+      const row = payload && payload.id ? payload : null;
+      if (!row) return res.status(500).json({ error: 'Could not save the order.' });
+      const { data: full, error: fetchError } = await sb
+        .from('orders')
+        .select(ORDER_SELECT)
+        .eq('id', row.id)
+        .single();
+      if (fetchError) return res.status(500).json({ error: friendlyDbError(fetchError) });
+      order = serializeOrder(full);
+    }
 
-    const order = serializeOrder(full);
-    await auditLog(req, 'order_create', 'order', order.id, {
+    auditLog(req, 'order_create', 'order', order.id, {
       orderNumber: order.number,
       customerName: order.customerName,
       orderType: order.orderType,
@@ -245,6 +266,8 @@ router.post('/', requireAuth, requireRole('cashier', 'admin'), async (req, res, 
       paymentMethod: order.paymentMethod,
       items: order.items.map((i) => `${i.quantity}x ${i.name}`),
     });
+    // Push it to the kitchen board immediately - never wait for a refresh.
+    publishOrderCreated(order);
     return res.status(201).json({ order });
   } catch (err) {
     return next(err);
@@ -306,14 +329,13 @@ router.post('/:id/pay', requireAuth, requireRole('cashier', 'admin'), async (req
       })
       .eq('id', id)
       .eq('payment_status', 'pending')
-      .select('id')
+      .select(ORDER_SELECT)
       .maybeSingle();
     if (updateError) return res.status(500).json({ error: friendlyDbError(updateError) });
     if (!updated) return res.status(409).json({ error: 'This order was already paid or cancelled.' });
 
-    const { data: full } = await sb.from('orders').select(ORDER_SELECT).eq('id', id).single();
-    const serialized = serializeOrder(full);
-    await auditLog(req, 'order_paid', 'order', id, {
+    const serialized = serializeOrder(updated);
+    auditLog(req, 'order_paid', 'order', id, {
       orderNumber: order.order_number,
       customerName: order.customer_name,
       method: body.method,
@@ -322,6 +344,7 @@ router.post('/:id/pay', requireAuth, requireRole('cashier', 'admin'), async (req
       changeCents,
       reference: body.reference || null,
     });
+    publishChange('orders', 'UPDATE');
     return res.json({ order: serialized });
   } catch (err) {
     return next(err);
@@ -339,13 +362,13 @@ router.post('/:id/start', requireAuth, requireRole('kitchen', 'admin'), async (r
       .update({ status: 'preparing', started_at: new Date().toISOString(), served_by: null })
       .eq('id', id)
       .eq('status', 'pending')
-      .select('id, order_number')
+      .select(ORDER_SELECT)
       .maybeSingle();
     if (error) return res.status(500).json({ error: friendlyDbError(error) });
     if (!updated) return res.status(409).json({ error: 'This order is no longer waiting.' });
-    await auditLog(req, 'order_start', 'order', id, { orderNumber: updated.order_number });
-    const { data: full } = await sb.from('orders').select(ORDER_SELECT).eq('id', id).single();
-    return res.json({ order: serializeOrder(full) });
+    auditLog(req, 'order_start', 'order', id, { orderNumber: updated.order_number });
+    publishChange('orders', 'UPDATE');
+    return res.json({ order: serializeOrder(updated) });
   } catch (err) {
     return next(err);
   }
@@ -362,13 +385,13 @@ router.post('/:id/serve', requireAuth, requireRole('kitchen', 'admin'), async (r
       .update({ status: 'served', served_at: new Date().toISOString(), served_by: req.user.id })
       .eq('id', id)
       .in('status', ['pending', 'preparing'])
-      .select('id, order_number')
+      .select(ORDER_SELECT)
       .maybeSingle();
     if (error) return res.status(500).json({ error: friendlyDbError(error) });
     if (!updated) return res.status(409).json({ error: 'This order was already served or cancelled.' });
-    await auditLog(req, 'order_serve', 'order', id, { orderNumber: updated.order_number });
-    const { data: full } = await sb.from('orders').select(ORDER_SELECT).eq('id', id).single();
-    return res.json({ order: serializeOrder(full) });
+    auditLog(req, 'order_serve', 'order', id, { orderNumber: updated.order_number });
+    publishChange('orders', 'UPDATE');
+    return res.json({ order: serializeOrder(updated) });
   } catch (err) {
     return next(err);
   }
@@ -403,19 +426,19 @@ router.post('/:id/cancel', requireAuth, requireRole('cashier', 'admin'), async (
       })
       .eq('id', id)
       .in('status', ['pending', 'preparing'])
-      .select('id')
+      .select(ORDER_SELECT)
       .maybeSingle();
     if (updateError) return res.status(500).json({ error: friendlyDbError(updateError) });
     if (!updated) return res.status(409).json({ error: 'This order was already served or cancelled.' });
 
-    const { data: full } = await sb.from('orders').select(ORDER_SELECT).eq('id', id).single();
-    await auditLog(req, 'order_cancel', 'order', id, {
+    auditLog(req, 'order_cancel', 'order', id, {
       orderNumber: order.order_number,
       customerName: order.customer_name,
       totalCents: toCents(order.total),
       reason,
     });
-    return res.json({ order: serializeOrder(full) });
+    publishChange('orders', 'UPDATE');
+    return res.json({ order: serializeOrder(updated) });
   } catch (err) {
     return next(err);
   }

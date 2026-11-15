@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
+    "dev": "node --watch-path=./src --watch src/server.js",
     "build:css": "tailwindcss -i src/styles/input.css -o public/css/tailwind.css --minify",
     "watch:css": "tailwindcss -i src/styles/input.css -o public/css/tailwind.css --watch"
   },

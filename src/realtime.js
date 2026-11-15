@@ -4,13 +4,16 @@
  * Realtime hub.
  *
  * Browser tabs keep one Server-Sent Events connection to /api/events.
- * This module watches the database two ways:
- *   1. Supabase Realtime (instant, when available)
- *   2. A lightweight safety poll (catches anything Realtime misses and keeps
- *      working even if Realtime is unavailable on the project)
+ * Update events reach the browsers three ways, in order of speed:
+ *   1. Direct broadcast from the API routes the moment a write succeeds
+ *      (instant, and the only one that never depends on the database).
+ *   2. Supabase Realtime (instant when the project has it enabled).
+ *   3. A lightweight safety poll that compares row signatures (catches
+ *      anything the first two miss, and keeps working when Realtime is off).
  *
  * Events pushed to browsers:
  *   { type: 'hello', realtime: bool }
+ *   { type: 'ping' }                               -> keeps the client watchdog happy
  *   { type: 'change', table, eventType, record }   -> pages refetch their data
  *   { type: 'order_created', order: {...} }        -> kitchen: new order alert
  */
@@ -24,7 +27,9 @@ const channels = new Map(); // table -> { ch, up }
 let realtimeUp = false;
 let channelStarted = false;
 let lastPollAt = 0;
+let lastSlowPollAt = 0;
 let lastSignatures = null;
+let lastOrderSignature = null;
 let lastOrderId = null;
 let pollFailures = 0;
 
@@ -33,8 +38,11 @@ let pollFailures = 0;
 // channel silently drops most events.
 const REALTIME_TABLES = ['orders', 'order_items', 'menu_items', 'users', 'settings', 'audit_logs'];
 
-const POLL_FAST_MS = 3000; // realtime unavailable
-const POLL_SAFETY_MS = 15000; // realtime up - safety net only
+// Orders drive the live kitchen / cashier screens, so they are polled quickly.
+const ORDER_POLL_MS = 4000;
+// Other tables only feed admin screens - a slower sweep is plenty.
+const SLOW_POLL_MS = 20000;
+const HEARTBEAT_MS = 15000;
 const SAFE_USERS_FIELDS = ['id', 'username', 'full_name', 'role', 'is_active'];
 
 function sseSend(client, payload) {
@@ -63,33 +71,74 @@ function sanitizeRecord(table, record) {
   return record;
 }
 
+/** Accepts both the raw database row and the API (serialized) order shape. */
+function orderAlertPayload(order) {
+  if (!order || !order.id) return null;
+  const number = order.number !== undefined ? order.number : order.order_number;
+  if (number === undefined || number === null) return null;
+  return {
+    id: order.id,
+    number,
+    numberLabel: order.numberLabel || `#${String(number).padStart(3, '0')}`,
+    customerName: order.customerName !== undefined ? order.customerName : order.customer_name,
+    orderType: order.orderType || order.order_type,
+    totalCents: order.totalCents !== undefined ? order.totalCents : toCents(order.total),
+    paymentStatus: order.paymentStatus || order.payment_status,
+    createdAt: order.createdAt || order.created_at,
+  };
+}
+
 function handleChange(table, payload) {
-  const eventType = payload.eventType || payload.event_type || 'UPDATE';
-  const rawRecord = eventType === 'DELETE' ? payload.old : payload.new;
-  const record = sanitizeRecord(table, rawRecord);
+  try {
+    const eventType = payload.eventType || payload.event_type || 'UPDATE';
+    const rawRecord = eventType === 'DELETE' ? payload.old : payload.new;
+    const record = sanitizeRecord(table, rawRecord);
 
-  if (table === 'users' || table === 'audit_logs') {
-    broadcast({ type: 'change', table, eventType, record }, 'admin');
-  } else {
-    broadcast({ type: 'change', table, eventType, record });
-  }
+    if (table === 'users' || table === 'audit_logs') {
+      broadcast({ type: 'change', table, eventType, record }, 'admin');
+    } else {
+      broadcast({ type: 'change', table, eventType, record });
+    }
 
-  if (table === 'orders' && eventType === 'INSERT' && record) {
-    broadcast({
-      type: 'order_created',
-      order: {
-        id: record.id,
-        number: record.order_number,
-        numberLabel: `#${String(record.order_number).padStart(3, '0')}`,
-        customerName: record.customer_name,
-        orderType: record.order_type,
-        totalCents: toCents(record.total),
-        paymentStatus: record.payment_status,
-        createdAt: record.created_at,
-      },
-    });
+    if (table === 'orders' && eventType === 'INSERT') {
+      const order = orderAlertPayload(record);
+      if (order) broadcast({ type: 'order_created', order });
+    }
+  } catch (err) {
+    // A bad payload must never take down the hub (or the request that sent it).
+    console.warn('[realtime] could not publish change:', err.message);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Public helpers - routes call these right after a successful write so the
+// other screens update instantly, with no wait for the database to notify us.
+// ---------------------------------------------------------------------------
+
+/** Tell every connected screen that a table changed. */
+function publishChange(table, eventType = 'UPDATE', record = null) {
+  if (clients.size === 0) return;
+  try {
+    handleChange(table, { eventType, new: record });
+  } catch (err) {
+    // Live updates must never break the write that produced them.
+    console.warn('[realtime] publish failed:', err.message);
+  }
+}
+
+/** Announce a brand new order (fires both the refetch and the kitchen alert). */
+function publishOrderCreated(record) {
+  if (clients.size === 0) return;
+  try {
+    handleChange('orders', { eventType: 'INSERT', new: record });
+  } catch (err) {
+    console.warn('[realtime] publish failed:', err.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Supabase Realtime
+// ---------------------------------------------------------------------------
 
 function startRealtimeChannel() {
   const sb = getClient();
@@ -144,7 +193,32 @@ function subscribeTable(sb, table) {
   }
 }
 
-/** Small fingerprint of each table used by the safety poll. */
+// ---------------------------------------------------------------------------
+// Safety poll
+// ---------------------------------------------------------------------------
+
+/** Most recently changed order - one row, covers inserts and updates alike. */
+async function latestOrderChange(sb) {
+  const { data } = await sb
+    .from('orders')
+    .select('id, order_number, updated_at')
+    .order('updated_at', { ascending: false })
+    .limit(1);
+  const row = data && data[0];
+  return row ? `${row.id}|${row.updated_at}` : null;
+}
+
+/** Highest order number - used to spot a new order even if updates lag. */
+async function newestOrder(sb) {
+  const { data } = await sb
+    .from('orders')
+    .select('id, order_number, customer_name, order_type, total, payment_status, created_at')
+    .order('order_number', { ascending: false })
+    .limit(1);
+  return data && data[0] ? data[0] : null;
+}
+
+/** Fingerprint of the slower admin tables. */
 async function tableSignature(sb, table, timeCol) {
   const [{ count }, { data }] = await Promise.all([
     sb.from(table).select('*', { count: 'exact', head: true }),
@@ -154,82 +228,103 @@ async function tableSignature(sb, table, timeCol) {
   return `${count || 0}|${latest}`;
 }
 
-async function pollOnce() {
+async function pollOrders() {
   const sb = getClient();
   if (!sb) return;
+
+  const [changeSignature, latest] = await Promise.all([
+    latestOrderChange(sb).catch(() => null),
+    newestOrder(sb).catch(() => null),
+  ]);
+
+  if (changeSignature !== null) {
+    const isFirstRun = lastOrderSignature === null;
+    if (!isFirstRun && changeSignature !== lastOrderSignature) {
+      handleChange('orders', { eventType: 'UPDATE', new: null });
+    }
+    lastOrderSignature = changeSignature;
+  }
+
+  if (latest) {
+    const isNewOrder = lastOrderId !== null && latest.id !== lastOrderId;
+    lastOrderId = latest.id;
+    if (isNewOrder) {
+      handleChange('orders', { eventType: 'INSERT', new: latest });
+    }
+  }
+}
+
+async function pollSlowTables() {
+  const sb = getClient();
+  if (!sb) return;
+  const tables = [
+    ['menu_items', 'updated_at'],
+    ['users', 'updated_at'],
+    ['settings', 'updated_at'],
+    ['audit_logs', 'created_at'],
+  ];
+  const results = await Promise.all(
+    tables.map(([table, timeCol]) => tableSignature(sb, table, timeCol).catch(() => null))
+  );
+  const signatures = {};
+  tables.forEach(([table], idx) => {
+    signatures[table] = results[idx];
+  });
+
+  if (lastSignatures) {
+    for (const [table] of tables) {
+      if (signatures[table] !== null && signatures[table] !== lastSignatures[table]) {
+        handleChange(table, { eventType: 'UPDATE', new: null });
+      }
+    }
+  }
+  lastSignatures = signatures;
+}
+
+async function pollOnce() {
   try {
-    const tables = [
-      ['orders', 'updated_at'],
-      ['menu_items', 'updated_at'],
-      ['users', 'updated_at'],
-      ['settings', 'updated_at'],
-      ['audit_logs', 'created_at'],
-    ];
-    const signatures = {};
-    const results = await Promise.all(
-      tables.map(([table, timeCol]) => tableSignature(sb, table, timeCol).catch(() => null))
-    );
-    tables.forEach(([table], idx) => {
-      signatures[table] = results[idx];
-    });
-
-    if (lastSignatures) {
-      for (const [table] of tables) {
-        if (signatures[table] !== null && signatures[table] !== lastSignatures[table]) {
-          handleChange(table, { eventType: 'UPDATE', new: null });
-        }
-      }
-    }
-    lastSignatures = signatures;
+    await pollOrders();
     pollFailures = 0;
-
-    // Detect new orders for the kitchen alert (independent of signature).
-    const { data: latest } = await sb
-      .from('orders')
-      .select('id, order_number, customer_name, order_type, total, payment_status, created_at')
-      .order('order_number', { ascending: false })
-      .limit(1);
-    const row = latest && latest[0];
-    if (row) {
-      if (lastOrderId === null) {
-        lastOrderId = row.id;
-      } else if (row.id !== lastOrderId) {
-        lastOrderId = row.id;
-        handleChange('orders', { eventType: 'INSERT', new: row });
-      }
-    }
   } catch (err) {
     pollFailures += 1;
     if (pollFailures === 1 || pollFailures % 10 === 0) {
-      console.warn('[realtime] safety poll failed:', err.message);
+      console.warn('[realtime] order poll failed:', err.message);
     }
   }
 }
 
 function pollTick() {
   if (!clients.size) return;
-  const minGap = realtimeUp ? POLL_SAFETY_MS : POLL_FAST_MS;
-  if (Date.now() - lastPollAt < minGap) return;
-  lastPollAt = Date.now();
-  pollOnce();
+  const now = Date.now();
+  if (now - lastPollAt >= ORDER_POLL_MS) {
+    lastPollAt = now;
+    pollOnce();
+  }
+  if (now - lastSlowPollAt >= SLOW_POLL_MS) {
+    lastSlowPollAt = now;
+    pollSlowTables().catch(() => {});
+  }
 }
 
 /** Register a browser SSE connection. */
 function addSseClient(req, res, user) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache, no-transform',
+    'Cache-Control': 'no-cache, no-store, no-transform',
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
   });
+  // Tell the browser to come back fast (within 3s) if the stream drops -
+  // the default can be slow and grows, which delays live updates.
+  res.write('retry: 3000\n\n');
   res.write(': connected\n\n');
 
   const client = { res, role: user.role, expiresAt: new Date(user.sessionExpiresAt).getTime() };
   clients.add(client);
-  sseSend(client, { type: 'hello', realtime: realtimeUp, timezone: config.timezone });
+  sseSend(client, { type: 'hello', realtime: realtimeUp, timezone: config.timezone, serverTime: Date.now() });
 
   req.on('close', () => clients.delete(client));
-  if (client.role === 'admin' || clients.size > 0) pollTick();
+  pollTick();
   return client;
 }
 
@@ -238,8 +333,8 @@ function startRealtime() {
 
   startRealtimeChannel();
 
-  // Heartbeat keeps proxies (Render) from closing idle SSE connections and
-  // drops sessions that expired while connected.
+  // Heartbeat: keeps proxies (Render) from closing idle SSE connections, tells
+  // the client watchdog the stream is alive, and drops expired sessions.
   setInterval(() => {
     const now = Date.now();
     for (const client of [...clients]) {
@@ -252,19 +347,22 @@ function startRealtime() {
         clients.delete(client);
         continue;
       }
-      try {
-        client.res.write(': ping\n\n');
-      } catch {
-        clients.delete(client);
-      }
+      sseSend(client, { type: 'ping', at: now });
     }
-  }, 20000);
+  }, HEARTBEAT_MS);
 
-  setInterval(pollTick, 3000);
+  setInterval(pollTick, 2000);
 }
 
 function realtimeStatus() {
   return { realtimeUp, sseClients: clients.size };
 }
 
-module.exports = { startRealtime, addSseClient, broadcast, realtimeStatus };
+module.exports = {
+  startRealtime,
+  addSseClient,
+  broadcast,
+  publishChange,
+  publishOrderCreated,
+  realtimeStatus,
+};

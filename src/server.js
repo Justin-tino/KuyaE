@@ -79,6 +79,13 @@ app.get('/healthz', (req, res) => res.status(200).send('ok'));
 app.use('/api', csrfProtection);
 app.use('/api', attachUser);
 
+// API data is live data: browsers and proxies must never cache it.
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  next();
+});
+
 app.use('/api', authRoutes);
 app.use('/api/menu', menuRoutes);
 app.use('/api/orders', orderRoutes);
@@ -133,7 +140,7 @@ app.use((err, req, res, next) => {
 // ---------------------------------------------------------------------------
 startRealtime();
 
-app.listen(config.port, '0.0.0.0', () => {
+const server = app.listen(config.port, '0.0.0.0', () => {
   console.log('');
   console.log('  Kuya E Tapsilogan POS');
   console.log(`  http://localhost:${config.port}`);
@@ -141,4 +148,17 @@ app.listen(config.port, '0.0.0.0', () => {
   console.log(`  Timezone:      ${config.timezone}`);
   console.log(`  Environment:   ${config.nodeEnv}`);
   console.log('');
+});
+
+// A clear message beats a stack trace when a previous instance still owns the port.
+server.on('error', (err) => {
+  if (err && err.code === 'EADDRINUSE') {
+    console.error('');
+    console.error(`  [server] Port ${config.port} is already in use.`);
+    console.error('           Another POS server is probably still running.');
+    console.error('           Close it (or set PORT to a free port) and start again.');
+    console.error('');
+    process.exit(1);
+  }
+  throw err;
 });

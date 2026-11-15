@@ -3,11 +3,11 @@
 import { api } from './api.js';
 import { icon } from './icons.js';
 import { state } from './state.js';
+import { salesReportPdfBlob } from './pdf.js';
 import {
   esc,
   money,
   fmtDateTime,
-  fmtTime,
   openModal,
   closeAllModals,
   toast,
@@ -81,28 +81,28 @@ export function openPaymentModal({ mode = 'create', totalCents = 0, onSubmit, su
   function changeBoxHtml() {
     const { diff, hasCash } = cashValues();
     if (!hasCash) {
-      return `<div class="flex items-center justify-between rounded-2xl border border-stone-200 bg-stone-50 px-5 py-4 text-stone-500">
+      return `<div class="flex items-center justify-between rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-stone-500">
         <span class="font-bold">Change</span>
-        <span class="text-xl font-bold">Enter cash received</span>
+        <span class="text-base font-bold">Enter cash received</span>
       </div>`;
     }
     const good = diff >= 0;
-    return `<div class="flex items-center justify-between rounded-2xl border px-5 py-4 ${
+    return `<div class="flex items-center justify-between rounded-2xl border px-4 py-3 ${
       good ? 'border-emerald-300 bg-emerald-50 text-emerald-900' : 'border-red-300 bg-red-50 text-red-900'
     }">
-      <span class="text-lg font-bold">${good ? 'Change' : 'Short by'}</span>
-      <span class="text-3xl font-extrabold">${money(Math.abs(diff))}</span>
+      <span class="text-base font-bold">${good ? 'Change' : 'Short by'}</span>
+      <span class="text-2xl font-extrabold">${money(Math.abs(diff))}</span>
     </div>`;
   }
 
   function methodCard(value, label, iconName, hint) {
     const active = ui.method === value;
     return `<button type="button" data-action="method" data-method="${value}"
-      class="flex flex-col items-center gap-1 rounded-2xl border-2 px-4 py-4 transition-colors ${
+      class="flex flex-col items-center gap-0.5 rounded-2xl border-2 px-3 py-3 transition-colors ${
         active ? 'border-red-700 bg-red-50 text-red-800' : 'border-stone-200 bg-white text-stone-700 hover:bg-stone-50'
       }">
-      ${icon(iconName, 'w-7 h-7')}
-      <span class="text-lg font-bold">${esc(label)}</span>
+      ${icon(iconName, 'w-6 h-6')}
+      <span class="text-base font-bold">${esc(label)}</span>
       <span class="text-xs font-semibold text-stone-500">${esc(hint)}</span>
     </button>`;
   }
@@ -110,11 +110,11 @@ export function openPaymentModal({ mode = 'create', totalCents = 0, onSubmit, su
   function choiceCard(value, label, iconName, hint) {
     const active = ui.choice === value;
     return `<button type="button" data-action="choice" data-choice="${value}"
-      class="flex flex-col items-center gap-1 rounded-2xl border-2 px-4 py-4 transition-colors ${
+      class="flex flex-col items-center gap-0.5 rounded-2xl border-2 px-3 py-3 transition-colors ${
         active ? 'border-red-700 bg-red-50 text-red-800' : 'border-stone-200 bg-white text-stone-700 hover:bg-stone-50'
       }">
-      ${icon(iconName, 'w-7 h-7')}
-      <span class="text-lg font-bold">${esc(label)}</span>
+      ${icon(iconName, 'w-6 h-6')}
+      <span class="text-base font-bold">${esc(label)}</span>
       <span class="text-xs font-semibold text-stone-500">${esc(hint)}</span>
     </button>`;
   }
@@ -122,10 +122,10 @@ export function openPaymentModal({ mode = 'create', totalCents = 0, onSubmit, su
   function render() {
     const { diff, hasCash } = cashValues();
     modal.setBody(`
-      <div class="space-y-5">
-        <div class="flex items-center justify-between rounded-2xl bg-stone-100 px-5 py-4">
-          <span class="text-lg font-bold text-stone-600">Total to pay</span>
-          <span class="text-3xl font-extrabold text-stone-900">${money(totalCents)}</span>
+      <div class="space-y-4">
+        <div class="flex items-center justify-between rounded-2xl bg-stone-100 px-4 py-3">
+          <span class="text-base font-bold text-stone-600">Total to pay</span>
+          <span class="text-2xl font-extrabold text-stone-900">${money(totalCents)}</span>
         </div>
 
         ${
@@ -465,7 +465,7 @@ export function openOrderDetailsModal(order, { canManage = false, onChanged } = 
 }
 
 // ---------------------------------------------------------------------------
-// Printing
+// Printing & PDF downloads
 // ---------------------------------------------------------------------------
 
 export function printHtmlDocument(html) {
@@ -579,183 +579,28 @@ export function printReceipt(order) {
   printHtmlDocument(receiptHtml(order, state.settings));
 }
 
-function rangeLabel(range) {
-  if (!range) return '';
-  return range.from === range.to
-    ? fmtDateLong(range.from)
-    : `${fmtDateLong(range.from)} to ${fmtDateLong(range.to)}`;
-}
-
-function fmtDateLong(dateStr) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Intl.DateTimeFormat('en-PH', {
-    timeZone: 'UTC',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  }).format(new Date(Date.UTC(y, m - 1, d)));
-}
-
-export function reportHtml(data, settings, generatedBy) {
-  const s = settings || {};
-  const sum = data.summary;
-  const money2 = (cents) => money(cents);
-
-  const summaryBox = (label, value, sub = '') => `
-    <td class="sum-box">
-      <div class="sum-label">${esc(label)}</div>
-      <div class="sum-value">${value}</div>
-      ${sub ? `<div class="sum-sub">${esc(sub)}</div>` : ''}
-    </td>`;
-
-  const dailyRows = data.daily
-    .map(
-      (d) => `<tr>
-        <td>${esc(fmtDateLong(d.date))}</td>
-        <td class="right">${d.ordersCount}</td>
-        <td class="right">${money2(d.grossCents)}</td>
-        <td class="right">${money2(d.paidCents)}</td>
-      </tr>`
-    )
-    .join('');
-
-  const itemRows = data.topItems
-    .map(
-      (item, index) => `<tr>
-        <td>${index + 1}</td>
-        <td>${esc(item.name)}</td>
-        <td class="right">${item.quantity}</td>
-        <td class="right">${money2(item.salesCents)}</td>
-      </tr>`
-    )
-    .join('');
-
-  const staffRows = data.staff
-    .map(
-      (member) => `<tr>
-        <td>${esc(member.name)}</td>
-        <td class="right">${member.ordersCount}</td>
-        <td class="right">${money2(member.salesCents)}</td>
-      </tr>`
-    )
-    .join('');
-
-  const orderRows = data.orders
-    .map(
-      (order) => `<tr>
-        <td>${esc(order.numberLabel)}</td>
-        <td>${esc(fmtTime(order.createdAt))}</td>
-        <td>${esc(order.customerName)}</td>
-        <td>${order.orderType === 'dine_in' ? 'Dine In' : 'Take Out'}</td>
-        <td class="right">${money2(order.totalCents)}</td>
-        <td>${order.status === 'cancelled' ? 'Cancelled' : order.paymentStatus === 'paid' ? 'Paid' : 'Unpaid'}</td>
-      </tr>`
-    )
-    .join('');
-
-  return `<!doctype html>
-<html><head><meta charset="utf-8"><title>Sales Report ${esc(rangeLabel(data.range))}</title>
-<style>
-  @page { size: A4; margin: 12mm; }
-  * { box-sizing: border-box; }
-  body { font-family: "Segoe UI", Arial, sans-serif; color: #1c1917; font-size: 11px; margin: 0; }
-  .header { display: flex; align-items: center; gap: 12px; border-bottom: 2px solid #b91c1c; padding-bottom: 8px; }
-  .logo { width: 46px; height: 46px; object-fit: contain; }
-  .shop-name { font-size: 20px; font-weight: 800; }
-  .shop-meta { color: #57534e; font-size: 10px; }
-  .report-title { margin: 12px 0 2px; font-size: 15px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; }
-  .report-meta { color: #57534e; font-size: 10px; margin-bottom: 10px; }
-  table { width: 100%; border-collapse: collapse; }
-  .sum-table { margin-bottom: 12px; }
-  .sum-box { border: 1px solid #d6d3d1; padding: 7px 9px; width: 25%; vertical-align: top; }
-  .sum-label { font-size: 9px; text-transform: uppercase; letter-spacing: .4px; color: #78716c; font-weight: 700; }
-  .sum-value { font-size: 15px; font-weight: 800; margin-top: 2px; }
-  .sum-sub { font-size: 9px; color: #78716c; }
-  h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin: 14px 0 5px; color: #44403c; }
-  th { text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .4px; color: #57534e; border-bottom: 1px solid #a8a29e; padding: 4px 5px; }
-  td { padding: 3.5px 5px; border-bottom: 1px solid #e7e5e4; }
-  .right { text-align: right; }
-  .two-col { display: flex; gap: 14px; }
-  .two-col > div { flex: 1; }
-  .note { margin-top: 12px; font-size: 9px; color: #78716c; border-top: 1px solid #e7e5e4; padding-top: 6px; }
-  .sign { margin-top: 22px; display: flex; gap: 40px; font-size: 10px; }
-  .sign div { flex: 1; border-top: 1px solid #44403c; padding-top: 4px; }
-  tr { page-break-inside: avoid; }
-</style></head>
-<body>
-  <div class="header">
-    <img src="/images/logo.png" alt="" class="logo">
-    <div>
-      <div class="shop-name">${esc(s.restaurantName || 'Tapsilogan')}</div>
-      <div class="shop-meta">${esc(s.address || '')}${s.address && s.phone ? ' | ' : ''}${esc(s.phone || '')}</div>
-    </div>
-  </div>
-
-  <div class="report-title">Sales Report</div>
-  <div class="report-meta">
-    ${esc(rangeLabel(data.range))} &nbsp;|&nbsp; Generated ${esc(fmtDateTime(data.generatedAt))}
-    ${generatedBy ? ` &nbsp;|&nbsp; By ${esc(generatedBy)}` : ''}
-  </div>
-
-  <table class="sum-table">
-    <tr>
-      ${summaryBox('Gross Sales', money2(sum.grossCents), `${sum.ordersCount} orders`)}
-      ${summaryBox('Collected', money2(sum.paidCents), `${sum.cashCount + sum.onlineCount} paid orders`)}
-      ${summaryBox('Uncollected', money2(sum.unpaidCents), 'unpaid orders')}
-      ${summaryBox('Average Order', money2(sum.avgOrderCents), `${sum.itemsSold} items sold`)}
-    </tr>
-    <tr>
-      ${summaryBox('Cash', money2(sum.cashCents), `${sum.cashCount} orders`)}
-      ${summaryBox('Online', money2(sum.onlineCents), `${sum.onlineCount} orders`)}
-      ${summaryBox('Dine In', money2(data.orderTypes.dineIn.totalCents), `${data.orderTypes.dineIn.count} orders`)}
-      ${summaryBox('Take Out', money2(data.orderTypes.takeOut.totalCents), `${data.orderTypes.takeOut.count} orders`)}
-    </tr>
-  </table>
-
-  <h3>Daily Breakdown</h3>
-  <table>
-    <thead><tr><th>Date</th><th class="right">Orders</th><th class="right">Gross Sales</th><th class="right">Collected</th></tr></thead>
-    <tbody>${dailyRows || '<tr><td colspan="4">No orders in this period.</td></tr>'}</tbody>
-  </table>
-
-  <div class="two-col">
-    <div>
-      <h3>Top Items</h3>
-      <table>
-        <thead><tr><th>#</th><th>Item</th><th class="right">Qty</th><th class="right">Sales</th></tr></thead>
-        <tbody>${itemRows || '<tr><td colspan="4">No items sold.</td></tr>'}</tbody>
-      </table>
-    </div>
-    <div>
-      <h3>Staff Performance</h3>
-      <table>
-        <thead><tr><th>Staff</th><th class="right">Orders</th><th class="right">Sales</th></tr></thead>
-        <tbody>${staffRows || '<tr><td colspan="3">No data.</td></tr>'}</tbody>
-      </table>
-    </div>
-  </div>
-
-  <h3>Orders (last ${data.orders.length}${data.truncated ? ', truncated' : ''})</h3>
-  <table>
-    <thead><tr><th>Order</th><th>Time</th><th>Customer</th><th>Type</th><th class="right">Total</th><th>Payment</th></tr></thead>
-    <tbody>${orderRows || '<tr><td colspan="6">No orders in this period.</td></tr>'}</tbody>
-  </table>
-
-  <div class="note">
-    Cancelled orders are excluded from sales totals (${sum.cancelledCount} cancelled, ${money2(sum.cancelledCents)}).
-    Gross sales include unpaid orders. Collected is money actually received.
-  </div>
-
-  <div class="sign">
-    <div>Prepared by</div>
-    <div>Checked by</div>
-  </div>
-</body></html>`;
-}
-
-export function printSalesReport(data) {
-  const generatedBy = state.user ? state.user.fullName : '';
-  printHtmlDocument(reportHtml(data, state.settings, generatedBy));
+/** Build the sales report PDF and hand it to the browser as a download. */
+export async function downloadSalesReportPdf(data) {
+  try {
+    const blob = await salesReportPdfBlob(data, state.settings);
+    const range = data.range || {};
+    const name =
+      !range.from || (range.from === range.to)
+        ? `sales-report-${range.from || 'report'}.pdf`
+        : `sales-report-${range.from}_to_${range.to}.pdf`;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast('Sales report downloaded as PDF.', 'success');
+  } catch (err) {
+    console.error('PDF generation failed:', err);
+    toast(err && err.message ? err.message : 'Could not generate the PDF.', 'error');
+  }
 }
 
 // Re-exported for views that need a quick confirmation.

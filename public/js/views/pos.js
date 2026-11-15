@@ -1,21 +1,29 @@
-// Cashier: receive an order (menu, cart, payment, receipt).
+// Cashier: the order counter (menu catalogue, running order, payment, receipt).
+//
+// Tablet and up: catalogue and running order sit side by side and scroll
+// independently, with the total and "Receive Order" pinned so the cashier can
+// keep working while an order is in progress.
 
 import { api } from '../api.js';
 import { icon } from '../icons.js';
 import { state } from '../state.js';
-import { onTables } from '../realtime.js';
+import { onTables, everyWhileVisible } from '../realtime.js';
 import { openPaymentModal, printReceipt, typeLabel } from '../components.js';
 import {
   esc,
   money,
   toast,
-  pageLoader,
+  toastThrottled,
   emptyState,
   openModal,
   confirmDialog,
   renderPreservingFocus,
   debounce,
+  skeleton,
 } from '../ui.js';
+
+// Keeps prices and availability honest even if the live stream drops.
+const MENU_REFRESH_MS = 30000;
 
 let menuItems = [];
 let category = 'All';
@@ -28,6 +36,10 @@ let notes = '';
 let suggestedName = '';
 let mountedUserId = null;
 let rootEl = null;
+let menuSignature = '';
+let cartSignature = '';
+let lastTotalCents = 0;
+let hasData = false;
 
 export async function mount(container) {
   rootEl = container;
@@ -42,25 +54,32 @@ export async function mount(container) {
     nameTouched = false;
     notes = '';
     suggestedName = '';
+    menuSignature = '';
+    cartSignature = '';
+    hasData = false;
   }
-
-  container.innerHTML = pageLoader('Loading menu...');
-  const cleanups = [];
-  cleanups.push(onTables(['menu_items'], debounce(() => loadMenu(true), 250)));
 
   const onClick = (event) => handleClick(event);
   const onInput = (event) => handleInput(event);
   container.addEventListener('click', onClick);
   container.addEventListener('input', onInput);
 
+  const cleanups = [
+    () => container.removeEventListener('click', onClick),
+    () => container.removeEventListener('input', onInput),
+    onTables(['menu_items'], debounce(() => loadMenu(true), 250)),
+    everyWhileVisible(() => loadMenu(true), MENU_REFRESH_MS),
+  ];
+
+  renderSkeleton();
   await loadMenu(false);
 
-  return () => {
-    cleanups.forEach((fn) => fn());
-    container.removeEventListener('click', onClick);
-    container.removeEventListener('input', onInput);
-  };
+  return () => cleanups.forEach((fn) => fn());
 }
+
+// ---------------------------------------------------------------------------
+// Data
+// ---------------------------------------------------------------------------
 
 async function loadMenu(quiet) {
   try {
@@ -76,10 +95,12 @@ async function loadMenu(quiet) {
         entry.item = fresh;
       }
     }
-    if (!quiet) await loadSuggestedName();
+    if (!hasData) await loadSuggestedName();
+    hasData = true;
     renderAll();
   } catch (err) {
-    toast(err.message, 'error');
+    hasData = true;
+    toastThrottled('pos-menu', err.message, 'error', quiet ? 60000 : 4000);
   }
 }
 
@@ -93,33 +114,120 @@ async function loadSuggestedName() {
   if (!nameTouched) customerName = suggestedName;
 }
 
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+function renderSkeleton() {
+  const card = `
+    <div class="overflow-hidden rounded-xl border border-stone-200 bg-white">
+      ${skeleton('h-16 w-full skeleton-flat')}
+      <div class="space-y-1.5 px-2 pb-2 pt-1.5">
+        ${skeleton('h-3 w-3/4')}
+        ${skeleton('h-3.5 w-1/2')}
+      </div>
+    </div>`;
+  const cartLine = `
+    <div class="space-y-2 border-b border-stone-100 py-2.5">
+      <div class="flex justify-between gap-3">${skeleton('h-4 w-1/2')}${skeleton('h-4 w-16')}</div>
+      ${skeleton('h-8 w-32')}
+    </div>`;
+
+  rootEl.innerHTML = `
+    <div class="flex flex-col gap-3 workfit md:flex-row">
+      <section class="panel min-h-0 flex-1">
+        <div class="shrink-0 space-y-2.5 border-b border-stone-200 p-3">
+          ${skeleton('h-11 w-full')}
+          <div class="flex gap-2">${skeleton('h-10 w-16')}${skeleton('h-10 w-24')}${skeleton('h-10 w-20')}</div>
+        </div>
+        <div class="load-bar"></div>
+        <div class="grid grid-cols-3 gap-3 p-3 sm:grid-cols-4 md:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-6">
+          ${Array.from({ length: 12 }, () => card).join('')}
+        </div>
+      </section>
+      <aside class="w-full shrink-0 md:w-[340px] xl:w-[380px]">
+        <div class="panel h-full">
+          <div class="panel-head">
+            ${skeleton('h-5 w-32')}
+            ${skeleton('h-8 w-14')}
+          </div>
+          <div class="space-y-3 border-b border-stone-200 p-3">
+            ${skeleton('h-11 w-full')}
+            ${skeleton('h-12 w-full')}
+          </div>
+          <div class="p-3">${cartLine}${cartLine}${cartLine}</div>
+        </div>
+      </aside>
+    </div>`;
+}
+
+function menuFingerprint() {
+  return menuItems
+    .map((item) => `${item.id}:${item.priceCents}:${item.isAvailable ? 1 : 0}:${item.name}:${item.category}:${item.imageUrl || ''}`)
+    .join('|');
+}
+
+function cartFingerprint() {
+  return [...cart.entries()]
+    .map(([id, entry]) => `${id}:${entry.qty}:${entry.item.priceCents}:${entry.item.name}`)
+    .join('|');
+}
+
 function renderAll() {
   if (!rootEl) return;
-  renderPreservingFocus(rootEl, layoutHtml());
-  renderMenuGrid();
-  renderCategoryChips();
-  renderCart();
+  const fingerprint = menuFingerprint();
+  const isFresh = !rootEl.querySelector('#menu-grid');
+  const gridScroll = scrollOf('menu-grid');
+
+  if (isFresh) {
+    renderPreservingFocus(rootEl, layoutHtml());
+    renderCategoryChips();
+    renderMenuGrid();
+    renderCart();
+  } else {
+    // Background refresh: only touch what actually changed, so the catalogue
+    // does not flicker and the running order keeps its scroll and focus.
+    if (fingerprint !== menuSignature) {
+      renderCategoryChips();
+      renderMenuGrid();
+    }
+    if (cartFingerprint() !== cartSignature) renderCart();
+  }
+
+  setScrollOf('menu-grid', gridScroll);
+  menuSignature = fingerprint;
+}
+
+function scrollOf(id) {
+  const el = rootEl && rootEl.querySelector(`#${id}`);
+  return el ? el.scrollTop : 0;
+}
+
+function setScrollOf(id, value) {
+  const el = rootEl && rootEl.querySelector(`#${id}`);
+  if (el && value) el.scrollTop = value;
 }
 
 function layoutHtml() {
   return `
-    <div class="flex flex-col gap-4 xl:flex-row xl:items-start">
-      <section class="min-w-0 flex-1">
-        <div class="card mb-4 p-4">
-          <div class="flex flex-col gap-3">
-            <div class="relative">
-              <span class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-stone-400">${icon('search', 'w-5 h-5')}</span>
-              <input id="menu-search" data-focus-key="menu-search" class="input pl-12" placeholder="Search the menu..." value="${esc(search)}" autocomplete="off">
-            </div>
-            <div id="category-chips" class="no-scrollbar flex gap-2 overflow-x-auto pb-1"></div>
+    <div class="flex flex-col gap-3 workfit md:flex-row">
+      <section class="panel min-h-0 min-w-0 flex-1">
+        <div class="shrink-0 space-y-2.5 border-b border-stone-200 p-3">
+          <div class="relative">
+            <span class="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-stone-400">${icon('search', 'w-5 h-5')}</span>
+            <input id="menu-search" data-focus-key="menu-search" class="input pl-11" placeholder="Search the menu..." value="${esc(search)}" autocomplete="off">
+          </div>
+          <div class="flex items-center gap-2">
+            <div id="category-chips" class="no-scrollbar flex flex-1 gap-2 overflow-x-auto"></div>
+            <span id="menu-count" class="hidden shrink-0 text-xs font-bold uppercase tracking-wide text-stone-400 md:block"></span>
           </div>
         </div>
-        <div id="menu-grid" class="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 2xl:grid-cols-4"></div>
+        <div id="menu-grid" class="grid min-h-0 content-start grid-cols-3 gap-3 overflow-y-auto p-3 sm:grid-cols-4 md:flex-1 md:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-6"></div>
       </section>
 
-      <aside class="w-full shrink-0 xl:w-[380px]">
-        <div class="card xl:sticky xl:top-20">
-          <div id="cart-panel"></div>
+      <aside class="w-full shrink-0 md:w-[340px] xl:w-[380px]">
+        <div class="panel h-full">
+          <div id="cart-panel" class="flex min-h-0 flex-1 flex-col"></div>
         </div>
       </aside>
     </div>`;
@@ -150,6 +258,10 @@ function renderMenuGrid() {
   const grid = document.getElementById('menu-grid');
   if (!grid) return;
   const items = filteredMenu();
+
+  const count = document.getElementById('menu-count');
+  if (count) count.textContent = `${items.length} item${items.length === 1 ? '' : 's'}`;
+
   if (!menuItems.length) {
     grid.innerHTML = `<div class="col-span-full">${emptyState(
       'bowl',
@@ -164,7 +276,22 @@ function renderMenuGrid() {
   }
   grid.innerHTML = items.map(menuCardHtml).join('');
   grid.querySelectorAll('img[data-menu-img]').forEach((img) => {
-    img.addEventListener('error', () => img.remove(), { once: true });
+    // Broken or missing photo: fall back to the plate icon, never a blank tile.
+    img.addEventListener(
+      'error',
+      () => {
+        const wrap = img.parentElement;
+        img.remove();
+        if (wrap && !wrap.querySelector('[data-menu-fallback]')) {
+          const fallback = document.createElement('span');
+          fallback.setAttribute('data-menu-fallback', '');
+          fallback.className = 'text-stone-300';
+          fallback.innerHTML = icon('bowl', 'w-6 h-6');
+          wrap.prepend(fallback);
+        }
+      },
+      { once: true }
+    );
   });
 }
 
@@ -172,22 +299,36 @@ function menuCardHtml(item) {
   const qty = cart.get(item.id)?.qty || 0;
   return `
     <button type="button" data-add="${item.id}" ${item.isAvailable ? '' : 'disabled'}
-      class="group relative overflow-hidden rounded-2xl border border-stone-200 bg-white text-left shadow-sm transition-shadow ${
-        item.isAvailable ? 'hover:shadow-md active:scale-[0.99]' : 'cursor-not-allowed opacity-60'
+      class="group relative flex flex-col overflow-hidden rounded-xl border border-stone-200 bg-white text-left shadow-sm transition-all ${
+        item.isAvailable ? 'hover:border-stone-300 hover:shadow active:scale-[0.98]' : 'cursor-not-allowed opacity-60'
       }">
-      <div class="relative flex h-32 w-full items-center justify-center bg-stone-100 text-stone-300">
-        ${icon('bowl', 'w-10 h-10')}
-        ${item.imageUrl ? `<img src="${esc(item.imageUrl)}" alt="" class="absolute inset-0 h-full w-full object-cover" data-menu-img>` : ''}
-        ${qty ? `<span class="absolute right-2 top-2 flex h-8 min-w-8 items-center justify-center rounded-full bg-red-700 px-2 text-base font-extrabold text-white">${qty}</span>` : ''}
-        ${!item.isAvailable ? `<span class="absolute inset-0 flex items-center justify-center bg-stone-900/55 text-sm font-extrabold uppercase tracking-wide text-white">Unavailable</span>` : ''}
+      <div class="relative flex h-16 w-full items-center justify-center overflow-hidden bg-stone-50 p-1">
+        ${
+          item.imageUrl
+            ? `<img src="${esc(item.imageUrl)}" alt="" class="max-h-full max-w-full object-contain" data-menu-img>`
+            : `<span class="text-stone-300">${icon('bowl', 'w-6 h-6')}</span>`
+        }
+        ${
+          qty
+            ? `<span data-qty-badge class="pop-in absolute right-1 top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-700 px-1 text-xs font-extrabold text-white shadow">${qty}</span>`
+            : ''
+        }
+        ${
+          !item.isAvailable
+            ? '<span class="absolute inset-0 flex items-center justify-center bg-stone-900/55 text-xs font-extrabold uppercase tracking-wide text-white">Unavailable</span>'
+            : ''
+        }
       </div>
-      <div class="p-3">
-        <p class="line-clamp-2 text-lg font-bold leading-tight">${esc(item.name)}</p>
-        <p class="mt-0.5 text-sm text-stone-500">${esc(item.category)}</p>
-        <p class="mt-1 text-xl font-extrabold text-red-700">${money(item.priceCents)}</p>
+      <div class="flex flex-1 flex-col px-2 pb-1.5 pt-1">
+        <p class="line-clamp-2 text-xs font-bold leading-tight">${esc(item.name)}</p>
+        <p class="mt-auto pt-0.5 text-sm font-extrabold text-red-700">${money(item.priceCents)}</p>
       </div>
     </button>`;
 }
+
+// ---------------------------------------------------------------------------
+// Running order
+// ---------------------------------------------------------------------------
 
 function totalCents() {
   let total = 0;
@@ -195,28 +336,35 @@ function totalCents() {
   return total;
 }
 
+function cartCount() {
+  let count = 0;
+  for (const { qty } of cart.values()) count += qty;
+  return count;
+}
+
 function cartItemsHtml() {
   if (!cart.size) {
-    return `<div class="py-10 text-center text-stone-500">
-      <p class="text-lg font-semibold">No items yet</p>
-      <p class="text-sm">Tap a menu item to add it.</p>
+    return `<div class="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-stone-200 px-4 py-8 text-center">
+      <span class="text-stone-300">${icon('cart', 'w-8 h-8')}</span>
+      <p class="text-sm font-bold text-stone-600">No items yet</p>
+      <p class="text-xs text-stone-500">Tap a menu item to add it to this order.</p>
     </div>`;
   }
   return [...cart.entries()]
     .map(
       ([id, { item, qty }]) => `
-      <div class="border-b border-stone-100 py-3 last:border-0">
-        <div class="flex justify-between gap-3">
-          <p class="font-bold leading-tight">${esc(item.name)}</p>
-          <p class="whitespace-nowrap font-extrabold">${money(item.priceCents * qty)}</p>
+      <div class="flex flex-col gap-1.5 border-b border-stone-100 py-2.5 last:border-0">
+        <div class="flex items-baseline justify-between gap-3">
+          <p class="min-w-0 flex-1 truncate text-sm font-bold">${esc(item.name)}</p>
+          <p class="whitespace-nowrap text-sm font-extrabold">${money(item.priceCents * qty)}</p>
         </div>
-        <div class="mt-2 flex items-center justify-between">
-          <span class="text-sm text-stone-500">${money(item.priceCents)} each</span>
-          <div class="flex items-center gap-2">
-            <button type="button" data-cart="dec" data-id="${id}" class="btn btn-secondary btn-sm w-10 px-0" aria-label="Less">${icon('minus', 'w-4 h-4')}</button>
-            <span class="w-8 text-center text-lg font-extrabold">${qty}</span>
-            <button type="button" data-cart="inc" data-id="${id}" class="btn btn-secondary btn-sm w-10 px-0" aria-label="More">${icon('plus', 'w-4 h-4')}</button>
-            <button type="button" data-cart="remove" data-id="${id}" class="btn btn-ghost btn-sm w-10 px-0 text-red-700" aria-label="Remove">${icon('x', 'w-4 h-4')}</button>
+        <div class="flex items-center justify-between">
+          <span class="text-xs text-stone-500">${money(item.priceCents)} each</span>
+          <div class="flex items-center gap-1">
+            <button type="button" data-cart="dec" data-id="${id}" class="btn btn-secondary btn-sm w-9 px-0" aria-label="Less">${icon('minus', 'w-4 h-4')}</button>
+            <span class="w-8 text-center text-sm font-extrabold">${qty}</span>
+            <button type="button" data-cart="inc" data-id="${id}" class="btn btn-secondary btn-sm w-9 px-0" aria-label="More">${icon('plus', 'w-4 h-4')}</button>
+            <button type="button" data-cart="remove" data-id="${id}" class="btn btn-ghost btn-sm w-9 px-0 text-red-700" aria-label="Remove">${icon('x', 'w-4 h-4')}</button>
           </div>
         </div>
       </div>`
@@ -225,46 +373,54 @@ function cartItemsHtml() {
 }
 
 function cartPanelHtml() {
+  const count = cartCount();
+  const total = totalCents();
+  const bump = total !== lastTotalCents ? 'bump' : '';
+  lastTotalCents = total;
+
   return `
-    <div class="flex items-center justify-between border-b border-stone-200 px-5 py-4">
-      <h2 class="text-xl font-extrabold">Current Order</h2>
+    <div class="panel-head">
+      <div class="flex items-center gap-2">
+        <h2 class="panel-title">Current Order</h2>
+        ${count ? `<span class="badge bg-stone-900 text-white">${count} item${count === 1 ? '' : 's'}</span>` : ''}
+      </div>
       <button type="button" data-action="clear" class="btn btn-ghost btn-sm" ${cart.size ? '' : 'disabled'}>Clear</button>
     </div>
 
-    <div class="space-y-4 border-b border-stone-200 px-5 py-4">
+    <div class="shrink-0 space-y-3 border-b border-stone-200 px-3.5 py-3">
       <div>
-        <label class="label" for="customer-name">Customer name</label>
+        <label class="label" for="customer-name">Customer</label>
         <div class="flex gap-2">
           <input id="customer-name" data-input="customer" data-focus-key="customer" class="input" value="${esc(customerName)}"
             placeholder="Customer name" autocomplete="off" maxlength="80">
-          <button type="button" data-action="auto-name" class="btn btn-secondary btn-md shrink-0" title="Use the auto-generated name">
-            ${icon('refresh', 'w-5 h-5')}<span class="hidden sm:inline">Auto</span>
+          <button type="button" data-action="auto-name" class="btn btn-secondary btn-md shrink-0 px-3" title="Use the suggested name">
+            ${icon('refresh', 'w-5 h-5')}
           </button>
         </div>
-        <p class="mt-1 text-sm text-stone-500">Auto name: <span class="font-semibold">${esc(suggestedName || 'Customer')}</span></p>
+        <p class="mt-1 text-xs text-stone-500">Suggested: <span class="font-semibold text-stone-600">${esc(suggestedName || 'Customer')}</span></p>
       </div>
       <div>
         <p class="label">Order type</p>
-        <div class="grid grid-cols-2 gap-2">
-          <button type="button" data-type="dine_in" class="btn btn-md ${orderType === 'dine_in' ? 'btn-primary' : 'btn-secondary'}">Dine In</button>
-          <button type="button" data-type="take_out" class="btn btn-md ${orderType === 'take_out' ? 'btn-primary' : 'btn-secondary'}">Take Out</button>
+        <div class="seg">
+          <button type="button" data-type="dine_in" class="seg-btn ${orderType === 'dine_in' ? 'seg-btn-active' : ''}">Dine In</button>
+          <button type="button" data-type="take_out" class="seg-btn ${orderType === 'take_out' ? 'seg-btn-active' : ''}">Take Out</button>
         </div>
       </div>
     </div>
 
-    <div class="max-h-[38vh] overflow-y-auto px-5 py-2">
+    <div data-cart-items class="min-h-0 max-h-[42vh] overflow-y-auto px-3.5 py-1 md:max-h-none md:flex-1">
       ${cartItemsHtml()}
     </div>
 
-    <div class="space-y-3 border-t border-stone-200 px-5 py-4">
+    <div class="shrink-0 space-y-2.5 border-t border-stone-200 px-3.5 py-3">
       <div>
-        <label class="label" for="order-notes">Notes (optional)</label>
+        <label class="label" for="order-notes">Notes</label>
         <input id="order-notes" data-input="notes" data-focus-key="notes" class="input" value="${esc(notes)}"
           placeholder="e.g. extra rice, no onion" autocomplete="off" maxlength="300">
       </div>
-      <div class="flex items-center justify-between">
-        <span class="text-lg font-bold text-stone-600">Total</span>
-        <span class="text-3xl font-extrabold">${money(totalCents())}</span>
+      <div class="flex items-end justify-between">
+        <span class="text-xs font-bold uppercase tracking-wide text-stone-500">Total</span>
+        <span class="text-2xl font-extrabold ${bump}">${money(total)}</span>
       </div>
       <button type="button" data-action="receive" class="btn btn-lg btn-success w-full" ${cart.size ? '' : 'disabled'}>
         ${icon('check', 'w-6 h-6')} Receive Order
@@ -274,7 +430,13 @@ function cartPanelHtml() {
 
 function renderCart() {
   const panel = document.getElementById('cart-panel');
-  if (panel) renderPreservingFocus(panel, cartPanelHtml());
+  if (!panel) return;
+  const scroller = panel.querySelector('[data-cart-items]');
+  const scrollTop = scroller ? scroller.scrollTop : 0;
+  renderPreservingFocus(panel, cartPanelHtml());
+  const nextScroller = panel.querySelector('[data-cart-items]');
+  if (nextScroller) nextScroller.scrollTop = scrollTop;
+  cartSignature = cartFingerprint();
 }
 
 function renderQtyBadges() {
@@ -292,12 +454,16 @@ function renderQtyBadges() {
       badge = document.createElement('span');
       badge.setAttribute('data-qty-badge', '');
       badge.className =
-        'absolute right-2 top-2 flex h-8 min-w-8 items-center justify-center rounded-full bg-red-700 px-2 text-base font-extrabold text-white';
+        'pop-in absolute right-1 top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-700 px-1 text-xs font-extrabold text-white shadow';
       imgWrap.appendChild(badge);
     }
     badge.textContent = String(entry.qty);
   });
 }
+
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
 
 function handleClick(event) {
   const addButton = event.target.closest('[data-add]');
@@ -310,7 +476,9 @@ function handleClick(event) {
   if (categoryButton) {
     category = categoryButton.getAttribute('data-category');
     renderCategoryChips();
+    const gridScroll = scrollOf('menu-grid');
     renderMenuGrid();
+    setScrollOf('menu-grid', gridScroll);
     return;
   }
 
@@ -361,7 +529,9 @@ function handleInput(event) {
   const input = event.target;
   if (input.id === 'menu-search') {
     search = input.value;
+    const gridScroll = scrollOf('menu-grid');
     renderMenuGrid();
+    setScrollOf('menu-grid', gridScroll);
     return;
   }
   const field = input.getAttribute('data-input');
@@ -397,7 +567,7 @@ async function clearCart() {
   cart = new Map();
   notes = '';
   renderCart();
-  renderMenuGrid();
+  renderQtyBadges();
 }
 
 function receiveOrder() {
@@ -432,9 +602,10 @@ function resetOrder() {
   nameTouched = false;
   customerName = '';
   suggestedName = '';
+  lastTotalCents = 0;
   loadSuggestedName().then(() => {
     renderCart();
-    renderMenuGrid();
+    renderQtyBadges();
   });
 }
 
@@ -447,27 +618,27 @@ function showSuccessModal(order) {
     size: 'md',
     content: `
       <div class="space-y-4 text-center">
-        <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
-          ${icon('check', 'w-9 h-9')}
+        <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+          ${icon('check', 'w-8 h-8')}
         </div>
         <div>
-          <p class="text-lg font-semibold text-stone-500">Order number</p>
-          <p class="text-6xl font-extrabold tracking-tight">${esc(order.numberLabel)}</p>
+          <p class="text-xs font-bold uppercase tracking-wide text-stone-500">Order number</p>
+          <p class="text-5xl font-extrabold tracking-tight">${esc(order.numberLabel)}</p>
         </div>
-        <p class="text-xl font-bold">${esc(order.customerName)} &middot; ${esc(typeLabel(order.orderType))}</p>
-        <p class="text-lg text-stone-600">Total: <span class="font-extrabold text-stone-900">${money(order.totalCents)}</span></p>
+        <p class="text-lg font-bold">${esc(order.customerName)} &middot; ${esc(typeLabel(order.orderType))}</p>
+        <p class="text-base text-stone-600">Total: <span class="font-extrabold text-stone-900">${money(order.totalCents)}</span></p>
         ${
           changeCents !== null
-            ? `<div class="mx-auto inline-flex flex-col rounded-2xl bg-stone-100 px-6 py-4">
-                <span class="text-sm font-bold uppercase tracking-wide text-stone-500">Change to give</span>
-                <span class="text-4xl font-extrabold text-emerald-700">${money(changeCents)}</span>
+            ? `<div class="mx-auto inline-flex flex-col rounded-2xl bg-stone-100 px-6 py-3">
+                <span class="text-xs font-bold uppercase tracking-wide text-stone-500">Change to give</span>
+                <span class="text-3xl font-extrabold text-emerald-700">${money(changeCents)}</span>
               </div>`
             : ''
         }
         ${
           order.paymentStatus === 'pending'
             ? `<div class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 font-semibold text-amber-900">
-                Saved as unpaid. Collect it from Pending Payments.
+                Saved as unpaid. Collect it any time under Pending Payments.
               </div>`
             : ''
         }

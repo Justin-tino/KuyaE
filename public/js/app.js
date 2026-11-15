@@ -3,14 +3,13 @@
 import { api, setUnauthorizedHandler } from './api.js';
 import { icon } from './icons.js';
 import { state, roleHome, ROLE_LABELS } from './state.js';
-import { connectEvents, disconnectEvents, onConnection, onEvent } from './realtime.js';
-import {
+import { connectEvents, disconnectEvents, onConnection, onEvent } from './realtime.js';import {
   esc,
   toast,
   openModal,
   withButtonLoading,
-  connectionPill,
   userPill,
+  shortName,
   startClock,
   spinner,
   closeAllModals,
@@ -26,32 +25,29 @@ import * as menuView from './views/menu.js';
 import * as usersView from './views/users.js';
 import * as auditView from './views/audit.js';
 import * as reportsView from './views/reports.js';
-import * as settingsView from './views/settings.js';
 
 const NAV = [
   { route: '#/dashboard', label: 'Sales Dashboard', icon: 'dashboard', roles: ['admin'] },
-  { route: '#/pos', label: 'New Order', icon: 'cart', roles: ['cashier', 'admin'] },
-  { route: '#/pending', label: 'Pending Payments', icon: 'clock', roles: ['cashier', 'admin'] },
+  { route: '#/pos', label: 'New Order', icon: 'cart', roles: ['cashier'] },
+  { route: '#/pending', label: 'Pending Payments', icon: 'clock', roles: ['cashier'] },
   { route: '#/orders', label: 'Orders', icon: 'receipt', roles: ['cashier', 'admin'] },
-  { route: '#/kitchen', label: 'Kitchen', icon: 'fire', roles: ['kitchen', 'admin'] },
+  { route: '#/kitchen', label: 'Kitchen', icon: 'fire', roles: ['kitchen'] },
   { route: '#/menu', label: 'Menu', icon: 'clipboard', roles: ['admin'] },
   { route: '#/users', label: 'Users', icon: 'users', roles: ['admin'] },
   { route: '#/audit', label: 'Audit Logs', icon: 'shield', roles: ['admin'] },
   { route: '#/reports', label: 'Sales Reports', icon: 'chart', roles: ['admin'] },
-  { route: '#/settings', label: 'Settings', icon: 'settings', roles: ['admin'] },
 ];
 
 const ROUTES = {
   '#/dashboard': { title: 'Sales Dashboard', roles: ['admin'], view: dashboardView },
-  '#/pos': { title: 'New Order', roles: ['cashier', 'admin'], view: posView },
-  '#/pending': { title: 'Pending Payments', roles: ['cashier', 'admin'], view: pendingView },
+  '#/pos': { title: 'New Order', roles: ['cashier'], view: posView },
+  '#/pending': { title: 'Pending Payments', roles: ['cashier'], view: pendingView },
   '#/orders': { title: 'Orders', roles: ['cashier', 'admin'], view: ordersView },
-  '#/kitchen': { title: 'Kitchen', roles: ['kitchen', 'admin'], view: kitchenView },
+  '#/kitchen': { title: 'Kitchen', roles: ['kitchen'], view: kitchenView },
   '#/menu': { title: 'Menu', roles: ['admin'], view: menuView },
   '#/users': { title: 'Users', roles: ['admin'], view: usersView },
   '#/audit': { title: 'Audit Logs', roles: ['admin'], view: auditView },
   '#/reports': { title: 'Sales Reports', roles: ['admin'], view: reportsView },
-  '#/settings': { title: 'Settings', roles: ['admin'], view: settingsView },
 };
 
 const app = document.getElementById('app');
@@ -61,6 +57,26 @@ let currentCleanup = null;
 let mountToken = 0;
 let stopClock = null;
 let offSettingsEvents = null;
+let offConnection = null;
+
+const CONN_STATUS_LABELS = {
+  live: 'Live',
+  reconnecting: 'Reconnecting',
+  offline: 'Offline',
+};
+
+/** Reflects the realtime stream health in the header pill. */
+function updateConnectionPill(status) {
+  const pill = document.getElementById('conn-status');
+  if (!pill) return;
+  pill.dataset.conn = status;
+  const label = pill.querySelector('.conn-label');
+  if (label) label.textContent = CONN_STATUS_LABELS[status] || status;
+  pill.title =
+    status === 'live'
+      ? 'Live updates are on. Orders appear here instantly, without refreshing.'
+      : 'Live updates are interrupted. The screen is refreshing on its own and will catch up.';
+}
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -95,7 +111,36 @@ function renderBootError(message) {
   app.querySelector('#retry').addEventListener('click', () => window.location.reload());
 }
 
+/**
+ * This app does not use a service worker. If an old one left behind by
+ * another project is registered on this origin, it intercepts every request
+ * (photo uploads included) and breaks them - so remove it and its caches.
+ */
+async function removeStaleServiceWorkers() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    for (const registration of registrations) {
+      try {
+        await registration.unregister();
+      } catch {
+        /* ignore */
+      }
+    }
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((key) => caches.delete(key).catch(() => {})));
+    }
+    if (registrations.length) {
+      console.warn('[app] Removed a stale service worker from this origin. Reload once more if anything looks cached.');
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 async function boot() {
+  removeStaleServiceWorkers();
   renderBootScreen();
   let status;
   try {
@@ -140,6 +185,10 @@ function showLogin() {
     offSettingsEvents();
     offSettingsEvents = null;
   }
+  if (offConnection) {
+    offConnection();
+    offConnection = null;
+  }
   renderLoginPage(app, state.status, (user) => enterApp(user));
 }
 
@@ -162,6 +211,7 @@ async function enterApp(user) {
   screen = 'shell';
   renderShell();
   connectEvents();
+  offConnection = onConnection(updateConnectionPill);
   stopClock = startClock();
 
   const home = roleHome(user.role);
@@ -183,7 +233,7 @@ function renderShell() {
         <div class="flex items-center gap-3 border-b border-stone-200 px-5 py-4">
           <img src="/images/logo.png" alt="Logo" class="h-12 w-12 shrink-0 object-contain">
           <div class="min-w-0">
-            <p id="shop-name" class="truncate text-lg font-extrabold leading-tight">${esc(settings.restaurantName || 'Tapsilogan')}</p>
+            <p id="shop-name" class="truncate text-lg font-extrabold leading-tight" title="${esc(settings.restaurantName || 'Tapsilogan')}">${esc(shortName(settings))}</p>
             <p class="text-xs font-bold uppercase tracking-wider text-stone-400">Point of Sale</p>
           </div>
         </div>
@@ -204,7 +254,9 @@ function renderShell() {
           </button>
           <h1 id="page-title" class="truncate text-xl font-extrabold"></h1>
           <div class="ml-auto flex items-center gap-3 sm:gap-4">
-            <span id="live-pill" class="hidden sm:inline-flex"></span>
+            <span id="conn-status" class="conn-pill hidden" data-conn="offline">
+              <span class="conn-dot"></span><span class="conn-label">Offline</span>
+            </span>
             <span data-clock class="hidden text-base font-semibold text-stone-500 md:inline"></span>
             <button type="button" id="account" class="btn btn-ghost btn-sm">
               ${icon('user', 'w-6 h-6')}<span class="hidden font-bold sm:inline">${esc(state.user.fullName)}</span>
@@ -216,7 +268,6 @@ function renderShell() {
     </div>`;
 
   renderNav();
-  setLivePill(sseStatus);
 
   const sidebar = document.getElementById('sidebar');
   const backdrop = document.getElementById('sidebar-backdrop');
@@ -244,7 +295,10 @@ function renderShell() {
         const data = await api('/settings');
         state.settings = data.settings;
         const shopName = document.getElementById('shop-name');
-        if (shopName) shopName.textContent = data.settings.restaurantName;
+        if (shopName) {
+          shopName.textContent = shortName(data.settings);
+          shopName.title = data.settings.restaurantName;
+        }
         document.title = `${data.settings.restaurantName} - POS`;
       } catch {
         /* ignore */
@@ -274,19 +328,6 @@ function updateNavActive() {
   });
 }
 
-function setLivePill(status) {
-  const pill = document.getElementById('live-pill');
-  if (!pill) return;
-  pill.innerHTML = connectionPill(status === 'live');
-}
-
-// Track SSE status on the pill (realtime pill reflects the live connection).
-let sseStatus = 'offline';
-onConnection((status) => {
-  sseStatus = status;
-  setLivePill(status);
-});
-
 async function signOut() {
   const ok = await confirmDialog({
     title: 'Sign Out',
@@ -306,6 +347,10 @@ async function signOut() {
   if (offSettingsEvents) {
     offSettingsEvents();
     offSettingsEvents = null;
+  }
+  if (offConnection) {
+    offConnection();
+    offConnection = null;
   }
   if (currentCleanup) {
     try {

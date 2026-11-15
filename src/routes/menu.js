@@ -10,6 +10,7 @@ const { auditLog } = require('../lib/audit');
 const { cleanText, firstZodError, isUuid, toCents } = require('../lib/helpers');
 const { serializeMenuItem } = require('../lib/serialize');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { publishChange } = require('../realtime');
 
 const router = express.Router();
 
@@ -52,7 +53,25 @@ function uploadError(res, err) {
     }
     return res.status(400).json({ error: 'Only JPG, PNG or WebP photos are allowed.' });
   }
+  if (err && err.friendly) {
+    return res.status(504).json({ error: err.message });
+  }
   return res.status(500).json({ error: friendlyDbError(err) });
+}
+
+// A stuck photo upload must answer with a clear error, not spin forever.
+const PHOTO_UPLOAD_TIMEOUT_MS = 45000;
+
+function withTimeout(promise, ms, message) {
+  let timer = null;
+  const guard = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(message);
+      err.friendly = true;
+      reject(err);
+    }, ms);
+  });
+  return Promise.race([promise, guard]).finally(() => clearTimeout(timer));
 }
 
 /** Upload a menu photo to the Supabase storage bucket (creates it if missing). */
@@ -60,8 +79,14 @@ async function saveMenuImage(sb, file) {
   const ext = ALLOWED_IMAGE_TYPES[file.mimetype];
   const path = `${crypto.randomUUID()}.${ext}`;
   const options = { contentType: file.mimetype, upsert: false, cacheControl: '31536000' };
+  const timeoutMessage =
+    'The photo upload is taking too long. Please check the internet connection and try again.';
 
-  let { error } = await sb.storage.from(config.bucket).upload(path, file.buffer, options);
+  let { error } = await withTimeout(
+    sb.storage.from(config.bucket).upload(path, file.buffer, options),
+    PHOTO_UPLOAD_TIMEOUT_MS,
+    timeoutMessage
+  );
   if (error && /bucket not found/i.test(error.message || '')) {
     try {
       await sb.storage.createBucket(config.bucket, {
@@ -72,9 +97,16 @@ async function saveMenuImage(sb, file) {
     } catch {
       /* ignored - retry below reports the real error */
     }
-    ({ error } = await sb.storage.from(config.bucket).upload(path, file.buffer, options));
+    ({ error } = await withTimeout(
+      sb.storage.from(config.bucket).upload(path, file.buffer, options),
+      PHOTO_UPLOAD_TIMEOUT_MS,
+      timeoutMessage
+    ));
   }
-  if (error) throw new Error(friendlyDbError(error));
+  if (error) {
+    if (error.friendly) throw error;
+    throw new Error(friendlyDbError(error));
+  }
 
   const { data } = sb.storage.from(config.bucket).getPublicUrl(path);
   return { path, url: data.publicUrl };
@@ -141,11 +173,12 @@ router.post('/', requireAuth, requireRole('admin'), upload.single('image'), asyn
       .single();
     if (error) return res.status(500).json({ error: friendlyDbError(error) });
 
-    await auditLog(req, 'menu_create', 'menu_item', data.id, {
+    auditLog(req, 'menu_create', 'menu_item', data.id, {
       name: data.name,
       category: data.category,
       priceCents: toCents(data.price),
     });
+    publishChange('menu_items', 'INSERT');
     return res.status(201).json({ item: serializeMenuItem(data) });
   } catch (err) {
     return next(err);
@@ -209,13 +242,15 @@ router.patch('/:id', requireAuth, requireRole('admin'), upload.single('image'), 
 
     const { data, error } = await sb.from('menu_items').update(updates).eq('id', id).select(MENU_SELECT).single();
     if (error) return res.status(500).json({ error: friendlyDbError(error) });
-    if (oldImagePath) await removeMenuImage(sb, oldImagePath);
+    // Best-effort cleanup after the response - the item is already saved.
+    if (oldImagePath) removeMenuImage(sb, oldImagePath);
 
-    await auditLog(req, 'menu_update', 'menu_item', id, {
+    auditLog(req, 'menu_update', 'menu_item', id, {
       name: data.name,
       changed: Object.keys(updates),
       priceCents: toCents(data.price),
     });
+    publishChange('menu_items', 'UPDATE');
     return res.json({ item: serializeMenuItem(data) });
   } catch (err) {
     return next(err);
@@ -239,9 +274,10 @@ router.delete('/:id', requireAuth, requireRole('admin'), async (req, res, next) 
 
     const { error } = await sb.from('menu_items').delete().eq('id', id);
     if (error) return res.status(500).json({ error: friendlyDbError(error) });
-    await removeMenuImage(sb, existing.image_path);
+    removeMenuImage(sb, existing.image_path);
 
-    await auditLog(req, 'menu_delete', 'menu_item', id, { name: existing.name, category: existing.category });
+    auditLog(req, 'menu_delete', 'menu_item', id, { name: existing.name, category: existing.category });
+    publishChange('menu_items', 'DELETE');
     return res.json({ ok: true });
   } catch (err) {
     return next(err);

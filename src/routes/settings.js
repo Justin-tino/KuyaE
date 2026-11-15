@@ -58,7 +58,7 @@ router.patch('/', requireAuth, requireRole('admin'), async (req, res, next) => {
       .single();
     if (error) return res.status(500).json({ error: friendlyDbError(error) });
 
-    await auditLog(req, 'settings_update', 'settings', '1', { restaurantName: data.restaurant_name });
+    auditLog(req, 'settings_update', 'settings', '1', { restaurantName: data.restaurant_name });
     const settings = serializeSettings(data);
     settings.timezone = config.timezone;
     return res.json({ settings });

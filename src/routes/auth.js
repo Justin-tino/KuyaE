@@ -15,6 +15,8 @@ const {
   clearSessionCookie,
   requireAuth,
   revokeUserSessions,
+  hashToken,
+  evictSessionCache,
 } = require('../middleware/auth');
 
 const router = express.Router();
@@ -59,14 +61,16 @@ router.get('/status', async (req, res) => {
     const sb = getClient();
     // NOTE: a HEAD request with count returns 204 and no count when the table is
     // missing, so a plain SELECT is used here to detect a database that is not set up.
-    const { data: existingUsers, error } = await sb.from('users').select('id').limit(1);
-    if (error) {
-      return res.json({ ...base, dbError: true, dbMessage: friendlyDbError(error) });
+    // Both reads run in parallel - the setup screen should not crawl.
+    const [usersRead, settingsRead] = await Promise.all([
+      sb.from('users').select('id').limit(1),
+      sb.from('settings').select('restaurant_name').eq('id', 1).maybeSingle(),
+    ]);
+    if (usersRead.error) {
+      return res.json({ ...base, dbError: true, dbMessage: friendlyDbError(usersRead.error) });
     }
-    let restaurantName = null;
-    const { data: settings } = await sb.from('settings').select('restaurant_name').eq('id', 1).maybeSingle();
-    if (settings) restaurantName = settings.restaurant_name;
-    return res.json({ ...base, needsSetup: (existingUsers || []).length === 0, restaurantName });
+    const restaurantName = settingsRead.data ? settingsRead.data.restaurant_name : null;
+    return res.json({ ...base, needsSetup: (usersRead.data || []).length === 0, restaurantName });
   } catch (err) {
     return res.json({ ...base, dbError: true, dbMessage: friendlyDbError(err) });
   }
@@ -115,7 +119,7 @@ router.post('/setup/first-admin', loginLimiter, async (req, res, next) => {
     const { token } = await createSession(sb, user.id, req);
     setSessionCookie(res, token);
     req.user = { id: user.id, username: user.username, fullName: user.full_name, role: user.role };
-    await auditLog(req, 'setup_first_admin', 'user', user.id, { username: user.username });
+    auditLog(req, 'setup_first_admin', 'user', user.id, { username: user.username });
     return res.json({ user: { id: user.id, username: user.username, fullName: user.full_name, role: user.role } });
   } catch (err) {
     return next(err);
@@ -136,7 +140,7 @@ router.post('/auth/login', loginLimiter, async (req, res, next) => {
 
     const lock = loginGuard.checkLock(username);
     if (lock.locked) {
-      await auditLog({ user: null }, 'login_locked', 'auth', null, { attemptedUsername: username });
+      auditLog({ user: null }, 'login_locked', 'auth', null, { attemptedUsername: username });
       return res
         .status(429)
         .json({ error: `Too many failed attempts. Try again in ${lock.retryInMinutes} minute(s).` });
@@ -155,11 +159,11 @@ router.post('/auth/login', loginLimiter, async (req, res, next) => {
 
     if (!user || !passwordOk) {
       loginGuard.recordFailure(username);
-      await auditLog({ user: null }, 'login_failed', 'auth', null, { attemptedUsername: username });
+      auditLog({ user: null }, 'login_failed', 'auth', null, { attemptedUsername: username });
       return res.status(401).json({ error: 'Incorrect username or password.' });
     }
     if (!user.is_active) {
-      await auditLog({ user: null }, 'login_failed', 'auth', user.id, {
+      auditLog({ user: null }, 'login_failed', 'auth', user.id, {
         attemptedUsername: username,
         reason: 'account disabled',
       });
@@ -167,11 +171,13 @@ router.post('/auth/login', loginLimiter, async (req, res, next) => {
     }
 
     loginGuard.recordSuccess(username);
-    await sb.from('users').update({ last_login_at: new Date().toISOString() }).eq('id', user.id);
-    const { token } = await createSession(sb, user.id, req);
+    const { token, expiresAt } = await createSession(sb, user.id, req);
     setSessionCookie(res, token);
-    req.user = { id: user.id, username: user.username, fullName: user.full_name, role: user.role };
-    await auditLog(req, 'login_success', 'auth', user.id, { username: user.username });
+    // Housekeeping and audit trail run after the response - the cashier is
+    // waiting to start working, and none of these affect the login result.
+    sb.from('users').update({ last_login_at: new Date().toISOString() }).eq('id', user.id).then(() => {}, () => {});
+    req.user = { id: user.id, username: user.username, fullName: user.full_name, role: user.role, sessionExpiresAt: expiresAt, tokenHash: hashToken(token) };
+    auditLog(req, 'login_success', 'auth', user.id, { username: user.username });
     return res.json({ user: { id: user.id, username: user.username, fullName: user.full_name, role: user.role } });
   } catch (err) {
     return next(err);
@@ -184,7 +190,8 @@ router.post('/auth/logout', async (req, res, next) => {
     const sb = getClient();
     if (req.user && req.user.tokenHash && sb) {
       await sb.from('sessions').delete().eq('token_hash', req.user.tokenHash);
-      await auditLog(req, 'logout', 'auth', req.user.id, { username: req.user.username });
+      evictSessionCache(req.user.tokenHash);
+      auditLog(req, 'logout', 'auth', req.user.id, { username: req.user.username });
     }
     clearSessionCookie(res);
     return res.json({ ok: true });
@@ -235,8 +242,8 @@ router.post('/auth/change-password', requireAuth, async (req, res, next) => {
     if (updateError) return res.status(500).json({ error: friendlyDbError(updateError) });
 
     // Sign out every other device for safety.
-    await revokeUserSessions(sb, req.user.id, req.user.tokenHash);
-    await auditLog(req, 'password_change', 'user', req.user.id, { username: req.user.username });
+    await revokeUserSessions(sb, req.user.id, req.user.tokenHash); // flushes the cache
+    auditLog(req, 'password_change', 'user', req.user.id, { username: req.user.username });
     return res.json({ ok: true });
   } catch (err) {
     return next(err);

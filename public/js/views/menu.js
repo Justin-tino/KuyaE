@@ -24,6 +24,38 @@ let categoryFilter = 'All';
 let rootEl = null;
 let loading = true;
 
+const MAX_PHOTO_EDGE = 800; // menu photos are shown small - 800px is plenty
+const SMALL_FILE_BYTES = 300 * 1024; // files this small are uploaded untouched
+
+/**
+ * Shrinks large photos in the browser before uploading (long edge 800px,
+ * JPEG). A 5 MB phone photo becomes a couple hundred KB, so saving is quick
+ * even on a slow connection. Falls back to the original file on any problem.
+ */
+async function shrinkImage(file) {
+  if (file.size <= SMALL_FILE_BYTES || typeof createImageBitmap !== 'function') return file;
+  let bitmap = null;
+  try {
+    bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_PHOTO_EDGE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#ffffff'; // flatten transparency for JPEG
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    if (bitmap.close) bitmap.close();
+    const blob = await new Promise((resolve) => canvas.toBlob((result) => resolve(result), 'image/jpeg', 0.85));
+    if (!blob || blob.size >= file.size) return file;
+    const name = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+    return new File([blob], name, { type: 'image/jpeg', lastModified: Date.now() });
+  } catch {
+    if (bitmap && bitmap.close) bitmap.close();
+    return file;
+  }
+}
+
 export async function mount(container) {
   rootEl = container;
   container.innerHTML = pageLoader('Loading menu...');
@@ -246,7 +278,7 @@ function openMenuForm(item) {
                 <input type="file" accept="image/jpeg,image/png,image/webp" class="hidden" data-file>
               </label>
               <button type="button" class="btn btn-ghost btn-sm text-red-700" data-remove-photo>${icon('trash', 'w-4 h-4')} Remove photo</button>
-              <p class="text-xs font-semibold text-stone-500">JPG, PNG or WebP. Maximum 5 MB.</p>
+              <p class="text-xs font-semibold text-stone-500">JPG, PNG or WebP. Maximum 5 MB. Large photos are resized automatically so saving stays fast.</p>
             </div>
           </div>
         </div>
@@ -301,6 +333,8 @@ function openMenuForm(item) {
     errorEl.classList.remove('hidden');
   };
 
+  let previewUrl = null;
+
   function setPreview(url) {
     if (url) {
       preview.innerHTML = `<img src="${esc(url)}" alt="" class="h-full w-full object-cover">`;
@@ -309,7 +343,7 @@ function openMenuForm(item) {
     }
   }
 
-  fileInput.addEventListener('change', () => {
+  fileInput.addEventListener('change', async () => {
     const file = fileInput.files && fileInput.files[0];
     if (!file) return;
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
@@ -323,15 +357,23 @@ function openMenuForm(item) {
       return;
     }
     errorEl.classList.add('hidden');
-    selectedFile = file;
     removePhoto = false;
-    setPreview(URL.createObjectURL(file));
+    setPreview(null);
+    // Resize big photos in the browser so the upload is small and fast.
+    selectedFile = await shrinkImage(file);
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = URL.createObjectURL(selectedFile);
+    setPreview(previewUrl);
   });
 
   modal.body.querySelector('[data-remove-photo]').addEventListener('click', () => {
     selectedFile = null;
     fileInput.value = '';
     removePhoto = true;
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      previewUrl = null;
+    }
     setPreview(null);
   });
 

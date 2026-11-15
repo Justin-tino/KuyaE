@@ -110,6 +110,11 @@ export function pageLoader(label = 'Loading...') {
     </div>`;
 }
 
+/** Grey shimmering placeholder block used while data loads. */
+export function skeleton(cls = 'h-4 w-full') {
+  return `<div class="skeleton ${cls}" aria-hidden="true"></div>`;
+}
+
 export function emptyState(iconName, title, hint = '', actionHtml = '') {
   return `
     <div class="flex flex-col items-center justify-center gap-3 py-16 px-6 text-center">
@@ -181,20 +186,47 @@ const TOAST_STYLES = {
   info: { cls: 'bg-stone-800 text-white', iconName: 'info' },
 };
 
-export function toast(message, type = 'info', ms = 4500) {
+/**
+ * Small notification, bottom of the screen. Auto-dismisses quickly (2s by
+ * default) and can be dismissed immediately with its X button.
+ */
+export function toast(message, type = 'info', ms = 2000) {
   const root = document.getElementById('toast-root');
-  if (!root) return;
+  if (!root) return null;
   const style = TOAST_STYLES[type] || TOAST_STYLES.info;
   const el = document.createElement('div');
-  el.className = `pointer-events-auto flex items-center gap-3 rounded-2xl px-5 py-4 shadow-lg text-lg font-semibold max-w-xl slide-up ${style.cls}`;
-  el.innerHTML = `<span class="shrink-0">${icon(style.iconName, 'w-6 h-6')}</span><span>${esc(message)}</span>`;
+  el.className = `pointer-events-auto flex w-auto max-w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold shadow-lg slide-up ${style.cls}`;
+  el.setAttribute('role', 'status');
+  el.innerHTML = `
+    <span class="shrink-0">${icon(style.iconName, 'w-4 h-4')}</span>
+    <span class="min-w-0 flex-1 leading-snug">${esc(message)}</span>
+    <button type="button" data-toast-close class="-mr-1 shrink-0 rounded-lg p-1 opacity-70 transition-opacity hover:bg-white/20 hover:opacity-100" aria-label="Dismiss notification">
+      ${icon('x', 'w-4 h-4')}
+    </button>`;
   root.appendChild(el);
-  setTimeout(() => {
-    el.style.transition = 'opacity .25s ease';
+
+  let gone = false;
+  const dismiss = () => {
+    if (gone) return;
+    gone = true;
+    el.style.transition = 'opacity .18s ease';
     el.style.opacity = '0';
-    setTimeout(() => el.remove(), 260);
-  }, ms);
+    setTimeout(() => el.remove(), 200);
+  };
+
+  el.querySelector('[data-toast-close]').addEventListener('click', dismiss);
+  setTimeout(dismiss, ms);
   return el;
+}
+
+const toastGate = new Map();
+
+/** Same as toast(), but at most one per key per interval (for refresh loops). */
+export function toastThrottled(key, message, type = 'error', ms = 60000) {
+  const last = toastGate.get(key) || 0;
+  if (Date.now() - last < ms) return null;
+  toastGate.set(key, Date.now());
+  return toast(message, type);
 }
 
 // ---------------------------------------------------------------------------
@@ -389,12 +421,6 @@ export function reasonDialog({ title, message, label = 'Reason', confirmLabel = 
 // Common snippets
 // ---------------------------------------------------------------------------
 
-export function connectionPill(isLive) {
-  return isLive
-    ? `<span class="badge bg-emerald-100 text-emerald-800">${icon('dot', 'w-3.5 h-3.5')} Live</span>`
-    : `<span class="badge bg-amber-100 text-amber-900">${spinner('w-3.5 h-3.5')} Reconnecting</span>`;
-}
-
 export function userPill(user) {
   const roleLabels = { admin: 'Admin', cashier: 'Cashier', kitchen: 'Kitchen' };
   return `
@@ -407,6 +433,18 @@ export function userPill(user) {
         <p class="text-sm text-stone-500">${esc(roleLabels[user.role] || user.role)}</p>
       </div>
     </div>`;
+}
+
+/**
+ * Compact brand name for tight spots (sidebar, small headers) and the
+ * sign-in screen: the first two words of the restaurant name, so
+ * "Kuya E Tapsilogan" shows as "Kuya E".
+ * The full name stays on receipts and reports.
+ */
+export function shortName(settings) {
+  const full = ((settings && settings.restaurantName) || 'Kuya E Tapsilogan').trim();
+  const words = full.split(/\s+/);
+  return words.length > 2 ? words.slice(0, 2).join(' ') : full;
 }
 
 export function currentClockHtml() {
