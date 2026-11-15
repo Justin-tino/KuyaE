@@ -115,12 +115,17 @@ export function skeleton(cls = 'h-4 w-full') {
   return `<div class="skeleton ${cls}" aria-hidden="true"></div>`;
 }
 
-export function emptyState(iconName, title, hint = '', actionHtml = '') {
+export function emptyState(iconName, title, hint = '', actionHtml = '', options = {}) {
+  const compact = Boolean(options.compact);
   return `
-    <div class="flex flex-col items-center justify-center gap-3 py-16 px-6 text-center">
-      <div class="w-16 h-16 rounded-2xl bg-stone-200 text-stone-500 flex items-center justify-center">${icon(iconName, 'w-8 h-8')}</div>
-      <p class="text-xl font-bold text-stone-700">${esc(title)}</p>
-      ${hint ? `<p class="text-stone-500 max-w-md">${esc(hint)}</p>` : ''}
+    <div class="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center ${
+      compact ? 'gap-2 px-4 py-8' : ''
+    }">
+      <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-stone-200 text-stone-500 ${
+        compact ? 'h-11 w-11 rounded-xl' : ''
+      }">${icon(iconName, compact ? 'w-6 h-6' : 'w-8 h-8')}</div>
+      <p class="font-bold text-stone-700 ${compact ? 'text-base' : 'text-xl'}">${esc(title)}</p>
+      ${hint ? `<p class="max-w-md text-stone-500 ${compact ? 'text-sm' : ''}">${esc(hint)}</p>` : ''}
       ${actionHtml ? `<div class="mt-2">${actionHtml}</div>` : ''}
     </div>`;
 }

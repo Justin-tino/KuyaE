@@ -138,7 +138,7 @@ function computeSignature() {
 
 function renderSkeleton() {
   rootEl.innerHTML = `
-    <div class="flex flex-col gap-3 workfit" data-skeleton>
+    <div class="flex flex-col gap-2 workfit sm:gap-3" data-skeleton>
       <div class="flex flex-wrap items-center gap-2">
         ${skeleton('h-9 w-32')}
         ${skeleton('h-9 w-36')}
@@ -146,7 +146,7 @@ function renderSkeleton() {
         <div class="ml-auto flex gap-2">${skeleton('h-9 w-32')}${skeleton('h-9 w-28')}</div>
       </div>
       <div class="load-bar rounded-full"></div>
-      <div class="grid min-h-0 gap-3 md:grid-cols-2 md:grid-rows-1 md:flex-1">
+      <div class="grid min-h-0 gap-2 sm:gap-3 md:grid-cols-2 md:grid-rows-1 md:flex-1">
         ${skeletonPane()}${skeletonPane()}
       </div>
     </div>`;
@@ -212,16 +212,18 @@ function boardHtml() {
   const cooking = orders.filter((order) => order.status === 'preparing');
 
   return `
-    <div class="flex flex-col gap-3 workfit" data-board-root>
+    <div class="flex flex-col gap-2 workfit sm:gap-3" data-board-root>
       ${toolbarHtml(queue, cooking)}
-      <div class="grid min-h-0 gap-3 md:grid-cols-2 md:grid-rows-1 md:flex-1">
+      <div class="grid min-h-0 gap-2 sm:gap-3 md:grid-cols-2 md:grid-rows-1 md:flex-1">
         ${paneHtml({
           key: 'queue',
           title: 'In Queue',
           iconName: 'clock',
           count: queue.length,
           badgeClass: 'bg-amber-100 text-amber-900',
-          empty: emptyState('clock', 'Queue is clear', 'New orders appear here the moment the cashier saves them.'),
+          empty: emptyState('clock', 'Queue is clear', 'New orders appear here the moment the cashier saves them.', '', {
+            compact: true,
+          }),
           body: queue
             .map((order, index) => cardHtml(order, { queue: true, isNext: index === 0 }))
             .join(''),
@@ -232,7 +234,9 @@ function boardHtml() {
           iconName: 'fire',
           count: cooking.length,
           badgeClass: 'bg-sky-100 text-sky-900',
-          empty: emptyState('fire', 'Nothing cooking', 'Tap "Start Cooking" on an order in the queue.'),
+          empty: emptyState('fire', 'Nothing cooking', 'Tap "Start Cooking" on an order in the queue.', '', {
+            compact: true,
+          }),
           body: cooking.map((order) => cardHtml(order, { queue: false })).join(''),
         })}
       </div>
@@ -241,28 +245,28 @@ function boardHtml() {
 
 function toolbarHtml(queue, cooking) {
   return `
-    <div class="flex flex-wrap items-center gap-2">
+    <div class="flex flex-wrap items-center gap-1.5 sm:gap-2">
       <div class="stat-chip">
         ${icon('clock', 'w-4 h-4 text-amber-600')}
-        <span class="text-xs font-bold uppercase tracking-wide text-stone-500">In Queue</span>
-        <span class="text-lg font-extrabold">${queue.length}</span>
+        <span class="text-[11px] font-bold uppercase tracking-wide text-stone-500 sm:text-xs">In Queue</span>
+        <span class="text-base font-extrabold sm:text-lg">${queue.length}</span>
       </div>
       <div class="stat-chip">
         ${icon('fire', 'w-4 h-4 text-sky-600')}
-        <span class="text-xs font-bold uppercase tracking-wide text-stone-500">Now Cooking</span>
-        <span class="text-lg font-extrabold text-sky-700">${cooking.length}</span>
+        <span class="text-[11px] font-bold uppercase tracking-wide text-stone-500 sm:text-xs">Now Cooking</span>
+        <span class="text-base font-extrabold text-sky-700 sm:text-lg">${cooking.length}</span>
       </div>
       <div class="stat-chip">
         ${icon('check', 'w-4 h-4 text-emerald-600')}
-        <span class="text-xs font-bold uppercase tracking-wide text-stone-500">Served Today</span>
-        <span class="text-lg font-extrabold text-emerald-700">${servedToday.length}</span>
+        <span class="text-[11px] font-bold uppercase tracking-wide text-stone-500 sm:text-xs">Served Today</span>
+        <span class="text-base font-extrabold text-emerald-700 sm:text-lg">${servedToday.length}</span>
       </div>
 
-      <div class="ml-auto flex items-center gap-2">
-        <button type="button" data-action="served" class="btn btn-secondary btn-sm">
+      <div class="ml-auto flex items-center gap-1.5 sm:gap-2">
+        <button type="button" data-action="served" class="btn btn-secondary btn-sm h-9 px-2.5 text-xs sm:h-10 sm:px-3 sm:text-sm">
           ${icon('receipt', 'w-4 h-4')} Served
         </button>
-        <button type="button" data-action="refresh" class="btn btn-ghost btn-sm">
+        <button type="button" data-action="refresh" class="btn btn-ghost btn-sm h-9 px-2.5 text-xs sm:h-10 sm:px-3 sm:text-sm">
           ${icon('refresh', 'w-4 h-4')} Refresh
         </button>
       </div>
@@ -278,10 +282,10 @@ function paneHtml({ key, title, iconName, count, badgeClass, body, empty }) {
     <section class="panel">
       <div class="panel-head">
         <h2 class="panel-title">${icon(iconName, 'w-4 h-4')} ${esc(title)}</h2>
-        <span class="badge ${badgeClass}">${count}</span>
+        <span class="badge ${badgeClass} px-2 py-0.5 text-[11px] sm:text-xs">${count}</span>
       </div>
-      <div data-board="${key}" class="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
-        ${count ? body : `<div class="rounded-2xl border border-dashed border-stone-200">${empty}</div>`}
+      <div data-board="${key}" class="min-h-0 flex-1 space-y-2 overflow-y-auto p-2 sm:p-2.5">
+        ${count ? body : `<div class="rounded-xl border border-dashed border-stone-200">${empty}</div>`}
       </div>
     </section>`;
 }
@@ -290,32 +294,32 @@ function cardHtml(order, { queue, isNext = false }) {
   const isNew = minutesAgo(order.createdAt) < 2;
   const unpaid = order.paymentStatus !== 'paid';
   return `
-    <article class="pop-in rounded-2xl border border-stone-200 bg-white p-3.5 shadow-sm ${
+    <article class="pop-in rounded-2xl border border-stone-200 bg-white p-2.5 shadow-sm sm:p-3 ${
       isNext ? 'ring-2 ring-stone-900' : ''
     } ${isNew ? 'flash-new border-amber-400' : ''}">
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
-          <p class="text-2xl font-extrabold leading-none tracking-tight">${esc(order.numberLabel)}</p>
-          <p class="mt-1 truncate text-sm font-bold text-stone-700">${esc(order.customerName)}</p>
+          <p class="text-xl font-extrabold leading-none tracking-tight sm:text-2xl">${esc(order.numberLabel)}</p>
+          <p class="mt-0.5 truncate text-xs font-bold text-stone-700 sm:text-sm">${esc(order.customerName)}</p>
         </div>
         <div class="flex shrink-0 flex-col items-end gap-1">
-          ${isNext ? '<span class="badge bg-stone-900 text-white">NEXT UP</span>' : ''}
-          ${isNew ? '<span class="badge bg-amber-400 text-stone-900">NEW</span>' : ''}
-          ${unpaid ? '<span class="badge bg-red-100 text-red-900">UNPAID</span>' : ''}
+          ${isNext ? '<span class="badge bg-stone-900 px-1.5 py-0.5 text-[10px] text-white sm:text-[11px]">NEXT UP</span>' : ''}
+          ${isNew ? '<span class="badge bg-amber-400 px-1.5 py-0.5 text-[10px] text-stone-900 sm:text-[11px]">NEW</span>' : ''}
+          ${unpaid ? '<span class="badge bg-red-100 px-1.5 py-0.5 text-[10px] text-red-900 sm:text-[11px]">UNPAID</span>' : ''}
         </div>
       </div>
 
-      <div class="mt-2 flex flex-wrap items-center gap-1.5">
+      <div class="mt-1.5 flex flex-wrap items-center gap-1">
         ${typeBadge(order.orderType)}
-        <span class="badge bg-stone-100 text-stone-600" data-elapsed="${esc(order.createdAt)}">${esc(
+        <span class="badge bg-stone-100 px-1.5 py-0.5 text-[10px] text-stone-600 sm:text-[11px]" data-elapsed="${esc(order.createdAt)}">${esc(
           elapsedLabel(order.createdAt)
         )}</span>
       </div>
 
-      <ul class="mt-2.5 space-y-1">
+      <ul class="mt-1.5 space-y-0.5">
         ${order.items
           .map(
-            (item) => `<li class="flex items-baseline gap-2 text-lg font-semibold leading-snug">
+            (item) => `<li class="flex items-baseline gap-1.5 text-base font-semibold leading-snug sm:text-lg">
               <span class="font-extrabold text-red-700">${item.quantity}x</span>
               <span>${esc(item.name)}</span>
             </li>`
@@ -325,21 +329,21 @@ function cardHtml(order, { queue, isNext = false }) {
 
       ${
         order.notes
-          ? `<div class="mt-2.5 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2">
-              <p class="text-xs font-bold uppercase tracking-wide text-amber-700">Notes</p>
-              <p class="text-base font-semibold text-amber-900">${esc(order.notes)}</p>
+          ? `<div class="mt-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1.5">
+              <p class="text-[10px] font-bold uppercase tracking-wide text-amber-700">Notes</p>
+              <p class="text-sm font-semibold text-amber-900">${esc(order.notes)}</p>
             </div>`
           : ''
       }
 
-      <div class="mt-3">
+      <div class="mt-2">
         ${
           queue
-            ? `<button type="button" data-start="${order.id}" class="btn btn-md btn-primary w-full">
-                ${icon('fire', 'w-5 h-5')} Start Cooking
+            ? `<button type="button" data-start="${order.id}" class="btn btn-md btn-primary h-10 w-full text-sm sm:h-11 sm:text-base">
+                ${icon('fire', 'w-4 h-4')} Start Cooking
               </button>`
-            : `<button type="button" data-serve="${order.id}" class="btn btn-md btn-success w-full">
-                ${icon('check', 'w-5 h-5')} Done &amp; Served
+            : `<button type="button" data-serve="${order.id}" class="btn btn-md btn-success h-10 w-full text-sm sm:h-11 sm:text-base">
+                ${icon('check', 'w-4 h-4')} Done &amp; Served
               </button>`
         }
       </div>

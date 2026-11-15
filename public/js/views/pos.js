@@ -134,18 +134,18 @@ function renderSkeleton() {
     </div>`;
 
   rootEl.innerHTML = `
-    <div class="flex flex-col gap-3 workfit md:flex-row">
+    <div class="flex flex-col gap-2 workfit sm:gap-3 md:flex-row">
       <section class="panel min-h-0 flex-1">
-        <div class="shrink-0 space-y-2.5 border-b border-stone-200 p-3">
-          ${skeleton('h-11 w-full')}
-          <div class="flex gap-2">${skeleton('h-10 w-16')}${skeleton('h-10 w-24')}${skeleton('h-10 w-20')}</div>
+        <div class="shrink-0 space-y-2 border-b border-stone-200 p-2 sm:space-y-2.5 sm:p-3">
+          ${skeleton('h-10 w-full')}
+          <div class="flex gap-2">${skeleton('h-9 w-16')}${skeleton('h-9 w-24')}${skeleton('h-9 w-20')}</div>
         </div>
         <div class="load-bar"></div>
-        <div class="grid grid-cols-3 gap-3 p-3 sm:grid-cols-4 md:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-6">
+        <div class="grid grid-cols-3 gap-2 p-2 sm:grid-cols-4 sm:gap-2.5 sm:p-2.5 md:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-6">
           ${Array.from({ length: 12 }, () => card).join('')}
         </div>
       </section>
-      <aside class="w-full shrink-0 md:w-[340px] xl:w-[380px]">
+      <aside class="w-full shrink-0 md:w-[300px] xl:w-[340px] 2xl:w-[360px]">
         <div class="panel h-full">
           <div class="panel-head">
             ${skeleton('h-5 w-32')}
@@ -210,22 +210,22 @@ function setScrollOf(id, value) {
 
 function layoutHtml() {
   return `
-    <div class="flex flex-col gap-3 workfit md:flex-row">
+    <div class="flex flex-col gap-2 workfit sm:gap-3 md:flex-row">
       <section class="panel min-h-0 min-w-0 flex-1">
-        <div class="shrink-0 space-y-2.5 border-b border-stone-200 p-3">
+        <div class="shrink-0 space-y-2 border-b border-stone-200 p-2 sm:space-y-2.5 sm:p-3">
           <div class="relative">
-            <span class="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-stone-400">${icon('search', 'w-5 h-5')}</span>
-            <input id="menu-search" data-focus-key="menu-search" class="input pl-11" placeholder="Search the menu..." value="${esc(search)}" autocomplete="off">
+            <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-stone-400">${icon('search', 'w-4 h-4')}</span>
+            <input id="menu-search" data-focus-key="menu-search" class="input h-10 pl-10 text-sm sm:h-11 sm:pl-11 sm:text-base" placeholder="Search the menu..." value="${esc(search)}" autocomplete="off">
           </div>
           <div class="flex items-center gap-2">
-            <div id="category-chips" class="no-scrollbar flex flex-1 gap-2 overflow-x-auto"></div>
+            <div id="category-chips" class="no-scrollbar flex flex-1 gap-1.5 overflow-x-auto"></div>
             <span id="menu-count" class="hidden shrink-0 text-xs font-bold uppercase tracking-wide text-stone-400 md:block"></span>
           </div>
         </div>
-        <div id="menu-grid" class="grid min-h-0 content-start grid-cols-3 gap-3 overflow-y-auto p-3 sm:grid-cols-4 md:flex-1 md:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-6"></div>
+        <div id="menu-grid" class="grid min-h-0 content-start grid-cols-3 gap-2 overflow-y-auto p-2 sm:grid-cols-4 sm:gap-2.5 sm:p-2.5 md:flex-1 md:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-6"></div>
       </section>
 
-      <aside class="w-full shrink-0 md:w-[340px] xl:w-[380px]">
+      <aside class="w-full shrink-0 md:w-[300px] xl:w-[340px] 2xl:w-[360px]">
         <div class="panel h-full">
           <div id="cart-panel" class="flex min-h-0 flex-1 flex-col"></div>
         </div>
@@ -240,7 +240,7 @@ function renderCategoryChips() {
   wrap.innerHTML = categories
     .map(
       (cat) =>
-        `<button type="button" data-category="${esc(cat)}" class="chip ${cat === category ? 'chip-active' : ''}">${esc(cat)}</button>`
+        `<button type="button" data-category="${esc(cat)}" class="chip h-9 px-3 text-xs sm:h-10 sm:text-sm ${cat === category ? 'chip-active' : ''}">${esc(cat)}</button>`
     )
     .join('');
 }
@@ -266,12 +266,20 @@ function renderMenuGrid() {
     grid.innerHTML = `<div class="col-span-full">${emptyState(
       'bowl',
       'The menu is empty',
-      'Ask the administrator to add menu items first.'
+      'Ask the administrator to add menu items first.',
+      '',
+      { compact: true }
     )}</div>`;
     return;
   }
   if (!items.length) {
-    grid.innerHTML = `<div class="col-span-full">${emptyState('search', 'No matching items', 'Try a different search or category.')}</div>`;
+    grid.innerHTML = `<div class="col-span-full">${emptyState(
+      'search',
+      'No matching items',
+      'Try a different search or category.',
+      '',
+      { compact: true }
+    )}</div>`;
     return;
   }
   grid.innerHTML = items.map(menuCardHtml).join('');
@@ -302,26 +310,26 @@ function menuCardHtml(item) {
       class="group relative flex flex-col overflow-hidden rounded-xl border border-stone-200 bg-white text-left shadow-sm transition-all ${
         item.isAvailable ? 'hover:border-stone-300 hover:shadow active:scale-[0.98]' : 'cursor-not-allowed opacity-60'
       }">
-      <div class="relative flex h-16 w-full items-center justify-center overflow-hidden bg-stone-50 p-1">
+      <div class="relative flex h-14 w-full items-center justify-center overflow-hidden bg-stone-50 p-1 sm:h-16">
         ${
           item.imageUrl
             ? `<img src="${esc(item.imageUrl)}" alt="" class="max-h-full max-w-full object-contain" data-menu-img>`
-            : `<span class="text-stone-300">${icon('bowl', 'w-6 h-6')}</span>`
+            : `<span class="text-stone-300">${icon('bowl', 'w-5 h-5')}</span>`
         }
         ${
           qty
-            ? `<span data-qty-badge class="pop-in absolute right-1 top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-700 px-1 text-xs font-extrabold text-white shadow">${qty}</span>`
+            ? `<span data-qty-badge class="pop-in absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-700 px-1 text-[10px] font-extrabold text-white shadow sm:h-5 sm:min-w-5 sm:text-xs">${qty}</span>`
             : ''
         }
         ${
           !item.isAvailable
-            ? '<span class="absolute inset-0 flex items-center justify-center bg-stone-900/55 text-xs font-extrabold uppercase tracking-wide text-white">Unavailable</span>'
+            ? '<span class="absolute inset-0 flex items-center justify-center bg-stone-900/55 px-0.5 text-center text-[10px] font-extrabold uppercase leading-tight tracking-wide text-white">Unavailable</span>'
             : ''
         }
       </div>
-      <div class="flex flex-1 flex-col px-2 pb-1.5 pt-1">
-        <p class="line-clamp-2 text-xs font-bold leading-tight">${esc(item.name)}</p>
-        <p class="mt-auto pt-0.5 text-sm font-extrabold text-red-700">${money(item.priceCents)}</p>
+      <div class="flex flex-1 flex-col px-1.5 pb-1 pt-1 sm:px-2 sm:pb-1.5">
+        <p class="line-clamp-2 text-[11px] font-bold leading-tight sm:text-xs">${esc(item.name)}</p>
+        <p class="mt-auto pt-0.5 text-[13px] font-extrabold text-red-700 sm:text-sm">${money(item.priceCents)}</p>
       </div>
     </button>`;
 }
@@ -344,8 +352,8 @@ function cartCount() {
 
 function cartItemsHtml() {
   if (!cart.size) {
-    return `<div class="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-stone-200 px-4 py-8 text-center">
-      <span class="text-stone-300">${icon('cart', 'w-8 h-8')}</span>
+    return `<div class="flex flex-col items-center gap-1.5 rounded-xl border border-dashed border-stone-200 px-3 py-4 text-center">
+      <span class="text-stone-300">${icon('cart', 'w-6 h-6')}</span>
       <p class="text-sm font-bold text-stone-600">No items yet</p>
       <p class="text-xs text-stone-500">Tap a menu item to add it to this order.</p>
     </div>`;
@@ -353,18 +361,18 @@ function cartItemsHtml() {
   return [...cart.entries()]
     .map(
       ([id, { item, qty }]) => `
-      <div class="flex flex-col gap-1.5 border-b border-stone-100 py-2.5 last:border-0">
-        <div class="flex items-baseline justify-between gap-3">
-          <p class="min-w-0 flex-1 truncate text-sm font-bold">${esc(item.name)}</p>
-          <p class="whitespace-nowrap text-sm font-extrabold">${money(item.priceCents * qty)}</p>
+      <div class="flex flex-col gap-1 border-b border-stone-100 py-2 last:border-0">
+        <div class="flex items-baseline justify-between gap-2">
+          <p class="min-w-0 flex-1 truncate text-[13px] font-bold sm:text-sm">${esc(item.name)}</p>
+          <p class="whitespace-nowrap text-[13px] font-extrabold sm:text-sm">${money(item.priceCents * qty)}</p>
         </div>
         <div class="flex items-center justify-between">
           <span class="text-xs text-stone-500">${money(item.priceCents)} each</span>
           <div class="flex items-center gap-1">
-            <button type="button" data-cart="dec" data-id="${id}" class="btn btn-secondary btn-sm w-9 px-0" aria-label="Less">${icon('minus', 'w-4 h-4')}</button>
-            <span class="w-8 text-center text-sm font-extrabold">${qty}</span>
-            <button type="button" data-cart="inc" data-id="${id}" class="btn btn-secondary btn-sm w-9 px-0" aria-label="More">${icon('plus', 'w-4 h-4')}</button>
-            <button type="button" data-cart="remove" data-id="${id}" class="btn btn-ghost btn-sm w-9 px-0 text-red-700" aria-label="Remove">${icon('x', 'w-4 h-4')}</button>
+            <button type="button" data-cart="dec" data-id="${id}" class="btn btn-secondary btn-sm h-8 w-8 px-0 sm:h-9 sm:w-9" aria-label="Less">${icon('minus', 'w-4 h-4')}</button>
+            <span class="w-7 text-center text-xs font-extrabold sm:w-8 sm:text-sm">${qty}</span>
+            <button type="button" data-cart="inc" data-id="${id}" class="btn btn-secondary btn-sm h-8 w-8 px-0 sm:h-9 sm:w-9" aria-label="More">${icon('plus', 'w-4 h-4')}</button>
+            <button type="button" data-cart="remove" data-id="${id}" class="btn btn-ghost btn-sm h-8 w-8 px-0 text-red-700 sm:h-9 sm:w-9" aria-label="Remove">${icon('x', 'w-4 h-4')}</button>
           </div>
         </div>
       </div>`
@@ -382,48 +390,48 @@ function cartPanelHtml() {
     <div class="panel-head">
       <div class="flex items-center gap-2">
         <h2 class="panel-title">Current Order</h2>
-        ${count ? `<span class="badge bg-stone-900 text-white">${count} item${count === 1 ? '' : 's'}</span>` : ''}
+        ${count ? `<span class="badge bg-stone-900 px-2 py-0.5 text-[11px] text-white sm:text-xs">${count} item${count === 1 ? '' : 's'}</span>` : ''}
       </div>
-      <button type="button" data-action="clear" class="btn btn-ghost btn-sm" ${cart.size ? '' : 'disabled'}>Clear</button>
+      <button type="button" data-action="clear" class="btn btn-ghost btn-sm h-8 px-2 text-xs sm:h-9 sm:px-3 sm:text-sm" ${cart.size ? '' : 'disabled'}>Clear</button>
     </div>
 
-    <div class="shrink-0 space-y-3 border-b border-stone-200 px-3.5 py-3">
+    <div class="shrink-0 space-y-2 border-b border-stone-200 px-2.5 py-2 sm:space-y-2.5 sm:px-3 sm:py-2.5">
       <div>
         <label class="label" for="customer-name">Customer</label>
         <div class="flex gap-2">
-          <input id="customer-name" data-input="customer" data-focus-key="customer" class="input" value="${esc(customerName)}"
+          <input id="customer-name" data-input="customer" data-focus-key="customer" class="input h-10 text-sm sm:h-11 sm:text-base" value="${esc(customerName)}"
             placeholder="Customer name" autocomplete="off" maxlength="80">
-          <button type="button" data-action="auto-name" class="btn btn-secondary btn-md shrink-0 px-3" title="Use the suggested name">
-            ${icon('refresh', 'w-5 h-5')}
+          <button type="button" data-action="auto-name" class="btn btn-secondary btn-md h-10 shrink-0 px-2.5 sm:h-11 sm:px-3" title="Use the suggested name">
+            ${icon('refresh', 'w-4 h-4')}
           </button>
         </div>
-        <p class="mt-1 text-xs text-stone-500">Suggested: <span class="font-semibold text-stone-600">${esc(suggestedName || 'Customer')}</span></p>
+        <p class="mt-0.5 text-xs text-stone-500">Suggested: <span class="font-semibold text-stone-600">${esc(suggestedName || 'Customer')}</span></p>
       </div>
       <div>
         <p class="label">Order type</p>
         <div class="seg">
-          <button type="button" data-type="dine_in" class="seg-btn ${orderType === 'dine_in' ? 'seg-btn-active' : ''}">Dine In</button>
-          <button type="button" data-type="take_out" class="seg-btn ${orderType === 'take_out' ? 'seg-btn-active' : ''}">Take Out</button>
+          <button type="button" data-type="dine_in" class="seg-btn h-9 text-xs sm:h-10 sm:text-sm ${orderType === 'dine_in' ? 'seg-btn-active' : ''}">Dine In</button>
+          <button type="button" data-type="take_out" class="seg-btn h-9 text-xs sm:h-10 sm:text-sm ${orderType === 'take_out' ? 'seg-btn-active' : ''}">Take Out</button>
         </div>
       </div>
     </div>
 
-    <div data-cart-items class="min-h-0 max-h-[42vh] overflow-y-auto px-3.5 py-1 md:max-h-none md:flex-1">
+    <div data-cart-items class="min-h-0 max-h-[42vh] overflow-y-auto px-2.5 py-0.5 sm:px-3 md:max-h-none md:flex-1">
       ${cartItemsHtml()}
     </div>
 
-    <div class="shrink-0 space-y-2.5 border-t border-stone-200 px-3.5 py-3">
+    <div class="shrink-0 space-y-2 border-t border-stone-200 px-2.5 py-2 sm:space-y-2.5 sm:px-3 sm:py-2.5">
       <div>
         <label class="label" for="order-notes">Notes</label>
-        <input id="order-notes" data-input="notes" data-focus-key="notes" class="input" value="${esc(notes)}"
+        <input id="order-notes" data-input="notes" data-focus-key="notes" class="input h-10 text-sm sm:h-11 sm:text-base" value="${esc(notes)}"
           placeholder="e.g. extra rice, no onion" autocomplete="off" maxlength="300">
       </div>
       <div class="flex items-end justify-between">
         <span class="text-xs font-bold uppercase tracking-wide text-stone-500">Total</span>
-        <span class="text-2xl font-extrabold ${bump}">${money(total)}</span>
+        <span class="text-xl font-extrabold sm:text-2xl ${bump}">${money(total)}</span>
       </div>
-      <button type="button" data-action="receive" class="btn btn-lg btn-success w-full" ${cart.size ? '' : 'disabled'}>
-        ${icon('check', 'w-6 h-6')} Receive Order
+      <button type="button" data-action="receive" class="btn btn-lg btn-success h-11 w-full text-base sm:h-12" ${cart.size ? '' : 'disabled'}>
+        ${icon('check', 'w-5 h-5')} Receive Order
       </button>
     </div>`;
 }
