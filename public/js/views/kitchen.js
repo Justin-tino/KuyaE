@@ -1,8 +1,13 @@
 // Kitchen display: live order board, first come first served.
 //
-// Layout: compact status toolbar + two independently scrolling boards
-// (In Queue / Now Cooking) that fill the screen from tablet size up, so the
-// cook never scrolls the page to see what is next.
+// Layout: compact status toolbar + two boards (In Queue / Now Cooking) that
+// fill the screen from tablet size up, so the cook never scrolls the page.
+//
+// Queue cards stay minimal - number, customer, paid/pending, a button that
+// opens the full order, and the "Cook" button. Cooking cards show only the
+// number and customer with a tick box; the whole batch is served with the
+// button under the board once every order is ticked, so a plate is never
+// served twice or skipped.
 
 import { api } from '../api.js';
 import { icon } from '../icons.js';
@@ -33,6 +38,9 @@ let boardSignature = '';
 let hasData = false;
 let loadError = '';
 let lastAlert = { id: '', at: 0 };
+// Orders the cook has ticked off in "Now Cooking" - kept here until the whole
+// batch is ticked and the "Served" button is pressed.
+let cookChecked = new Set();
 
 export async function mount(container) {
   rootEl = container;
@@ -41,12 +49,16 @@ export async function mount(container) {
   boardSignature = '';
   hasData = false;
   loadError = '';
+  cookChecked = new Set();
 
   const onClick = (event) => handleClick(event);
+  const onChange = (event) => handleCheckChange(event);
   container.addEventListener('click', onClick);
+  container.addEventListener('change', onChange);
 
   const cleanups = [
     () => container.removeEventListener('click', onClick),
+    () => container.removeEventListener('change', onChange),
     onTables(['orders'], debounce(() => refresh(true), 200)),
     onEvent((event) => {
       if (event.type !== 'order_created') return;
@@ -80,6 +92,7 @@ async function refresh(quiet) {
     servedToday = data.servedToday || [];
     loadError = '';
     hasData = true;
+    pruneChecked();
     renderBoard();
   } catch (err) {
     if (!hasData) {
@@ -112,7 +125,16 @@ function applyOrder(updated) {
     orders.push(updated);
     orders.sort((a, b) => a.number - b.number);
   }
+  pruneChecked();
   renderBoard();
+}
+
+/** Drops ticks for orders that stopped cooking (served or cancelled). */
+function pruneChecked() {
+  const stillCooking = new Set(orders.filter((order) => order.status === 'preparing').map((order) => order.id));
+  for (const id of [...cookChecked]) {
+    if (!stillCooking.has(id)) cookChecked.delete(id);
+  }
 }
 
 /** Cheap fingerprint: skip the DOM work when nothing actually changed. */
@@ -154,18 +176,17 @@ function renderSkeleton() {
 
 function skeletonPane() {
   const card = `
-    <div class="rounded-2xl border border-stone-200 p-3.5">
+    <div class="rounded-2xl border border-stone-200 p-2.5 sm:p-3">
       <div class="flex items-start justify-between gap-3">
         <div class="space-y-2">${skeleton('h-6 w-20')}${skeleton('h-4 w-28')}</div>
         ${skeleton('h-5 w-16')}
       </div>
-      <div class="mt-3 space-y-2">${skeleton('h-4 w-3/4')}${skeleton('h-4 w-1/2')}</div>
-      <div class="mt-3">${skeleton('h-10 w-full')}</div>
+      <div class="mt-3 space-y-2">${skeleton('h-9 w-full')}</div>
     </div>`;
   return `
     <section class="panel">
       <div class="panel-head">${skeleton('h-5 w-32')}${skeleton('h-6 w-9')}</div>
-      <div class="space-y-3 p-3">${card}${card}${card}</div>
+      <div class="grid gap-2 p-2 sm:gap-2.5 sm:p-2.5 md:grid-cols-2">${card}${card}${card}${card}</div>
     </section>`;
 }
 
@@ -224,9 +245,7 @@ function boardHtml() {
           empty: emptyState('clock', 'Queue is clear', 'New orders appear here the moment the cashier saves them.', '', {
             compact: true,
           }),
-          body: queue
-            .map((order, index) => cardHtml(order, { queue: true, isNext: index === 0 }))
-            .join(''),
+          body: queue.map((order, index) => queueCardHtml(order, index === 0)).join(''),
         })}
         ${paneHtml({
           key: 'cooking',
@@ -234,10 +253,9 @@ function boardHtml() {
           iconName: 'fire',
           count: cooking.length,
           badgeClass: 'bg-sky-100 text-sky-900',
-          empty: emptyState('fire', 'Nothing cooking', 'Tap "Start Cooking" on an order in the queue.', '', {
-            compact: true,
-          }),
-          body: cooking.map((order) => cardHtml(order, { queue: false })).join(''),
+          empty: emptyState('fire', 'Nothing cooking', 'Tap "Cook" on an order in the queue.', '', { compact: true }),
+          body: cooking.map((order) => cookingCardHtml(order)).join(''),
+          footer: cooking.length ? serveFooterHtml(cooking) : '',
         })}
       </div>
     </div>`;
@@ -277,7 +295,7 @@ function toolbarHtml(queue, cooking) {
     </div>`;
 }
 
-function paneHtml({ key, title, iconName, count, badgeClass, body, empty }) {
+function paneHtml({ key, title, iconName, count, badgeClass, body, empty, footer = '' }) {
   return `
     <section class="panel">
       <div class="panel-head">
@@ -291,14 +309,19 @@ function paneHtml({ key, title, iconName, count, badgeClass, body, empty }) {
             : `<div class="rounded-xl border border-dashed border-stone-200">${empty}</div>`
         }
       </div>
+      ${footer}
     </section>`;
 }
 
-function cardHtml(order, { queue, isNext = false }) {
+/**
+ * Queue card: only what the cook needs to decide - order number, customer,
+ * paid/pending - plus the button that opens the full order and "Cook".
+ */
+function queueCardHtml(order, isNext) {
   const isNew = minutesAgo(order.createdAt) < 2;
-  const unpaid = order.paymentStatus !== 'paid';
+  const paid = order.paymentStatus === 'paid';
   return `
-    <article class="pop-in rounded-2xl border border-stone-200 bg-white p-2.5 shadow-sm sm:p-3 ${
+    <article class="pop-in flex flex-col rounded-2xl border border-stone-200 bg-white p-2.5 shadow-sm sm:p-3 ${
       isNext ? 'ring-2 ring-stone-900' : ''
     } ${isNew ? 'flash-new border-amber-400' : ''}">
       <div class="flex items-start justify-between gap-2">
@@ -309,49 +332,69 @@ function cardHtml(order, { queue, isNext = false }) {
         <div class="flex shrink-0 flex-col items-end gap-1">
           ${isNext ? '<span class="badge bg-stone-900 px-1.5 py-0.5 text-[10px] text-white sm:text-[11px]">NEXT UP</span>' : ''}
           ${isNew ? '<span class="badge bg-amber-400 px-1.5 py-0.5 text-[10px] text-stone-900 sm:text-[11px]">NEW</span>' : ''}
-          ${unpaid ? '<span class="badge bg-red-100 px-1.5 py-0.5 text-[10px] text-red-900 sm:text-[11px]">UNPAID</span>' : ''}
         </div>
       </div>
 
       <div class="mt-1.5 flex flex-wrap items-center gap-1">
+        ${
+          paid
+            ? '<span class="badge bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-900 sm:text-[11px]">PAID</span>'
+            : '<span class="badge bg-red-100 px-1.5 py-0.5 text-[10px] text-red-900 sm:text-[11px]">PENDING</span>'
+        }
         ${typeBadge(order.orderType)}
-        <span class="badge bg-stone-100 px-1.5 py-0.5 text-[10px] text-stone-600 sm:text-[11px]" data-elapsed="${esc(order.createdAt)}">${esc(
-          elapsedLabel(order.createdAt)
-        )}</span>
+        <span class="badge bg-stone-100 px-1.5 py-0.5 text-[10px] text-stone-600 sm:text-[11px]" data-elapsed="${esc(
+          order.createdAt
+        )}">${esc(elapsedLabel(order.createdAt))}</span>
       </div>
 
-      <ul class="mt-1.5 space-y-0.5">
-        ${order.items
-          .map(
-            (item) => `<li class="flex items-baseline gap-1.5 text-base font-semibold leading-snug sm:text-lg">
-              <span class="font-extrabold text-red-700">${item.quantity}x</span>
-              <span>${esc(item.name)}</span>
-            </li>`
-          )
-          .join('')}
-      </ul>
-
-      ${
-        order.notes
-          ? `<div class="mt-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1.5">
-              <p class="text-[10px] font-bold uppercase tracking-wide text-amber-700">Notes</p>
-              <p class="text-sm font-semibold text-amber-900">${esc(order.notes)}</p>
-            </div>`
-          : ''
-      }
-
-      <div class="mt-2">
-        ${
-          queue
-            ? `<button type="button" data-start="${order.id}" class="btn btn-md btn-primary h-9 w-full text-[11px] sm:h-10">
-                ${icon('fire', 'h-3.5 w-3.5 sm:h-4 sm:w-4')} Start Cooking
-              </button>`
-            : `<button type="button" data-serve="${order.id}" class="btn btn-md btn-success h-9 w-full text-[11px] sm:h-10">
-                ${icon('check', 'h-3.5 w-3.5 sm:h-4 sm:w-4')} Done & Served
-              </button>`
-        }
+      <div class="mt-2 flex flex-col gap-1.5">
+        <button type="button" data-details="${order.id}" class="btn btn-secondary btn-md h-9 w-full text-[11px] sm:h-10">
+          ${icon('receipt', 'h-3.5 w-3.5 sm:h-4 sm:w-4')} View Order
+        </button>
+        <button type="button" data-start="${order.id}" class="btn btn-md btn-primary h-9 w-full text-[11px] sm:h-10">
+          ${icon('fire', 'h-3.5 w-3.5 sm:h-4 sm:w-4')} Cook
+        </button>
       </div>
     </article>`;
+}
+
+/** Cooking card: number and customer only, with a tick box for the batch serve. */
+function cookingCardHtml(order) {
+  const checked = cookChecked.has(order.id);
+  return `
+    <article class="pop-in rounded-2xl border p-2.5 shadow-sm transition-colors sm:p-3 ${
+      checked ? 'border-emerald-400 bg-emerald-50' : 'border-stone-200 bg-white'
+    }">
+      <label class="flex cursor-pointer items-start gap-2.5">
+        <input type="checkbox" data-check="${order.id}" ${checked ? 'checked' : ''}
+          class="mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded border-stone-300 accent-emerald-600">
+        <span class="min-w-0">
+          <span class="block text-xl font-extrabold leading-none tracking-tight sm:text-2xl">${esc(order.numberLabel)}</span>
+          <span class="mt-0.5 block truncate text-xs font-bold text-stone-700 sm:text-sm">${esc(order.customerName)}</span>
+        </span>
+      </label>
+    </article>`;
+}
+
+/** Batch serve footer: the button unlocks only when every order is ticked. */
+function serveFooterHtml(cooking) {
+  const ticked = cooking.filter((order) => cookChecked.has(order.id)).length;
+  const ready = cooking.length > 0 && ticked === cooking.length;
+  return `
+    <div data-serve-footer class="shrink-0 space-y-1 border-t border-stone-200 p-2 sm:p-2.5">
+      <button type="button" data-action="serve-checked" class="btn btn-md btn-success h-10 w-full text-sm sm:h-11 sm:text-base" ${
+        ready ? '' : 'disabled'
+      }>
+        ${icon('check', 'h-4 w-4 sm:h-5 sm:w-5')} Served${cooking.length > 1 ? ` (${ticked}/${cooking.length})` : ''}
+      </button>
+      <p class="text-center text-[11px] text-stone-500 sm:text-xs">
+        ${
+          ready
+            ? 'All ticked - tap Served to finish.'
+            : 'Tick each order when its plate is ready, then tap Served.'
+        }
+      </p>
+    </div>`;
 }
 
 function setBusy(value) {
@@ -360,8 +403,57 @@ function setBusy(value) {
 }
 
 // ---------------------------------------------------------------------------
-// Served list
+// Modals
 // ---------------------------------------------------------------------------
+
+/** Full order for one queue card - the list the cook works from. */
+function openOrderModal(order) {
+  openModal({
+    title: `Order ${order.numberLabel}`,
+    size: 'md',
+    content: `
+      <div class="space-y-4">
+        <div class="flex flex-wrap items-center gap-2">
+          ${
+            order.paymentStatus === 'paid'
+              ? '<span class="badge bg-emerald-100 px-2 py-0.5 text-xs text-emerald-900">PAID</span>'
+              : '<span class="badge bg-red-100 px-2 py-0.5 text-xs text-red-900">PENDING</span>'
+          }
+          ${typeBadge(order.orderType)}
+          <span class="text-xs font-semibold text-stone-500">${esc(elapsedLabel(order.createdAt))}</span>
+        </div>
+
+        <div class="rounded-xl border border-stone-200 px-4 py-3">
+          <p class="text-xs font-bold uppercase tracking-wide text-stone-500">Customer</p>
+          <p class="text-lg font-extrabold">${esc(order.customerName)}</p>
+        </div>
+
+        <div class="overflow-hidden rounded-xl border border-stone-200">
+          <ul class="divide-y divide-stone-100">
+            ${order.items
+              .map(
+                (item) => `<li class="flex items-baseline gap-3 px-4 py-3">
+                  <span class="text-lg font-extrabold text-red-700">${item.quantity}x</span>
+                  <span class="text-base font-semibold sm:text-lg">${esc(item.name)}</span>
+                </li>`
+              )
+              .join('')}
+          </ul>
+        </div>
+
+        ${
+          order.notes
+            ? `<div class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
+                <p class="text-xs font-bold uppercase tracking-wide text-amber-700">Notes</p>
+                <p class="text-base font-semibold text-amber-900">${esc(order.notes)}</p>
+              </div>`
+            : ''
+        }
+      </div>`,
+    footer: `
+      <button type="button" class="btn btn-lg btn-primary" data-action="close">Close</button>`,
+  });
+}
 
 function openServedModal() {
   openModal({
@@ -413,7 +505,39 @@ function updateElapsed() {
 // Actions
 // ---------------------------------------------------------------------------
 
+/** Ticking a cooking order only updates the card and the Served button. */
+function handleCheckChange(event) {
+  const box = event.target.closest('[data-check]');
+  if (!box) return;
+  const id = box.getAttribute('data-check');
+  if (box.checked) cookChecked.add(id);
+  else cookChecked.delete(id);
+
+  const card = box.closest('article');
+  if (card) {
+    card.classList.toggle('border-emerald-400', box.checked);
+    card.classList.toggle('bg-emerald-50', box.checked);
+    card.classList.toggle('border-stone-200', !box.checked);
+    card.classList.toggle('bg-white', !box.checked);
+  }
+  updateServeFooter();
+}
+
+function updateServeFooter() {
+  const wrap = rootEl && rootEl.querySelector('[data-serve-footer]');
+  if (!wrap) return;
+  const cooking = orders.filter((order) => order.status === 'preparing');
+  wrap.outerHTML = cooking.length ? serveFooterHtml(cooking) : '';
+}
+
 async function handleClick(event) {
+  const detailsButton = event.target.closest('[data-details]');
+  if (detailsButton) {
+    const order = orders.find((entry) => entry.id === detailsButton.getAttribute('data-details'));
+    if (order) openOrderModal(order);
+    return;
+  }
+
   const startButton = event.target.closest('[data-start]');
   if (startButton) {
     const id = startButton.getAttribute('data-start');
@@ -432,18 +556,22 @@ async function handleClick(event) {
     return;
   }
 
-  const serveButton = event.target.closest('[data-serve]');
+  const serveButton = event.target.closest('[data-action="serve-checked"]');
   if (serveButton) {
-    const id = serveButton.getAttribute('data-serve');
-    const order = orders.find((entry) => entry.id === id);
+    const cooking = orders.filter((order) => order.status === 'preparing' && cookChecked.has(order.id));
+    if (!cooking.length) return;
     await withButtonLoading(serveButton, 'Serving...', async () => {
-      try {
-        const data = await api(`/orders/${id}/serve`, { method: 'POST' });
-        applyOrder(data && data.order);
-        toast(order ? `${order.numberLabel} served.` : 'Order served.', 'success');
-      } catch (err) {
-        toast(err.message, 'error');
+      let served = 0;
+      for (const order of cooking) {
+        try {
+          const data = await api(`/orders/${order.id}/serve`, { method: 'POST' });
+          applyOrder(data && data.order);
+          served += 1;
+        } catch (err) {
+          toast(`${order.numberLabel}: ${err.message}`, 'error');
+        }
       }
+      if (served) toast(`${served} order${served === 1 ? '' : 's'} served.`, 'success');
     });
     return;
   }
