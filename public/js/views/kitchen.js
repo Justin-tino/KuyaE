@@ -3,11 +3,13 @@
 // Layout: compact status toolbar + two boards (In Queue / Now Cooking) that
 // fill the screen from tablet size up, so the cook never scrolls the page.
 //
-// Queue cards stay minimal - number, customer, paid/pending, a button that
-// opens the full order, and the "Cook" button. Cooking cards show only the
-// number and customer with a tick box; the whole batch is served with the
-// button under the board once every order is ticked, so a plate is never
-// served twice or skipped.
+// Cards stay minimal on purpose:
+//   In Queue    - number, customer, paid/pending, one "View Order" button.
+//                 The modal lists every dish and holds the "Cook" button.
+//   Now Cooking - number, customer, one "View" button. The modal lists every
+//                 dish of that order with a tick box each; only when all of
+//                 them are ticked can "Done" be pressed, which serves that
+//                 whole order - a dish is never served twice or missed.
 
 import { api } from '../api.js';
 import { icon } from '../icons.js';
@@ -38,9 +40,9 @@ let boardSignature = '';
 let hasData = false;
 let loadError = '';
 let lastAlert = { id: '', at: 0 };
-// Orders the cook has ticked off in "Now Cooking" - kept here until the whole
-// batch is ticked and the "Served" button is pressed.
-let cookChecked = new Set();
+// Dishes already ticked off, per order: orderId -> Set of dish positions.
+// Memory only - a page reload clears them, the board stays correct either way.
+const cookedItems = new Map();
 
 export async function mount(container) {
   rootEl = container;
@@ -49,16 +51,13 @@ export async function mount(container) {
   boardSignature = '';
   hasData = false;
   loadError = '';
-  cookChecked = new Set();
+  cookedItems.clear();
 
   const onClick = (event) => handleClick(event);
-  const onChange = (event) => handleCheckChange(event);
   container.addEventListener('click', onClick);
-  container.addEventListener('change', onChange);
 
   const cleanups = [
     () => container.removeEventListener('click', onClick),
-    () => container.removeEventListener('change', onChange),
     onTables(['orders'], debounce(() => refresh(true), 200)),
     onEvent((event) => {
       if (event.type !== 'order_created') return;
@@ -92,7 +91,7 @@ async function refresh(quiet) {
     servedToday = data.servedToday || [];
     loadError = '';
     hasData = true;
-    pruneChecked();
+    pruneCooked();
     renderBoard();
   } catch (err) {
     if (!hasData) {
@@ -125,17 +124,36 @@ function applyOrder(updated) {
     orders.push(updated);
     orders.sort((a, b) => a.number - b.number);
   }
-  pruneChecked();
+  pruneCooked();
   renderBoard();
 }
 
-/** Drops ticks for orders that stopped cooking (served or cancelled). */
-function pruneChecked() {
-  const stillCooking = new Set(orders.filter((order) => order.status === 'preparing').map((order) => order.id));
-  for (const id of [...cookChecked]) {
-    if (!stillCooking.has(id)) cookChecked.delete(id);
+// ---------------------------------------------------------------------------
+// Tick bookkeeping
+// ---------------------------------------------------------------------------
+
+/** Ticks for orders that left the board, or for dishes that no longer exist. */
+function pruneCooked() {
+  const cooking = new Map(orders.filter((order) => order.status === 'preparing').map((order) => [order.id, order.items.length]));
+  for (const [orderId, set] of [...cookedItems]) {
+    const total = cooking.get(orderId);
+    if (total === undefined) cookedItems.delete(orderId);
+    else if (total === 0) cookedItems.delete(orderId);
+    else for (const key of [...set]) if (Number(key) >= total) set.delete(key);
   }
 }
+
+/** How many dishes of an order are ticked. */
+function dishProgress(order) {
+  const set = cookedItems.get(order.id);
+  const ticked = set ? set.size : 0;
+  const total = order.items.length;
+  return { ticked, total, all: total > 0 && ticked === total };
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
 
 /** Cheap fingerprint: skip the DOM work when nothing actually changed. */
 function computeSignature() {
@@ -153,10 +171,6 @@ function computeSignature() {
     served: servedToday.length,
   });
 }
-
-// ---------------------------------------------------------------------------
-// Rendering
-// ---------------------------------------------------------------------------
 
 function renderSkeleton() {
   rootEl.innerHTML = `
@@ -181,7 +195,7 @@ function skeletonPane() {
         <div class="space-y-2">${skeleton('h-6 w-20')}${skeleton('h-4 w-28')}</div>
         ${skeleton('h-5 w-16')}
       </div>
-      <div class="mt-3 space-y-2">${skeleton('h-9 w-full')}</div>
+      <div class="mt-3">${skeleton('h-9 w-full')}</div>
     </div>`;
   return `
     <section class="panel">
@@ -255,7 +269,6 @@ function boardHtml() {
           badgeClass: 'bg-sky-100 text-sky-900',
           empty: emptyState('fire', 'Nothing cooking', 'Tap "Cook" on an order in the queue.', '', { compact: true }),
           body: cooking.map((order) => cookingCardHtml(order)).join(''),
-          footer: cooking.length ? serveFooterHtml(cooking) : '',
         })}
       </div>
     </div>`;
@@ -295,7 +308,7 @@ function toolbarHtml(queue, cooking) {
     </div>`;
 }
 
-function paneHtml({ key, title, iconName, count, badgeClass, body, empty, footer = '' }) {
+function paneHtml({ key, title, iconName, count, badgeClass, body, empty }) {
   return `
     <section class="panel">
       <div class="panel-head">
@@ -309,19 +322,15 @@ function paneHtml({ key, title, iconName, count, badgeClass, body, empty, footer
             : `<div class="rounded-xl border border-dashed border-stone-200">${empty}</div>`
         }
       </div>
-      ${footer}
     </section>`;
 }
 
-/**
- * Queue card: only what the cook needs to decide - order number, customer,
- * paid/pending - plus the button that opens the full order and "Cook".
- */
+/** Queue card: number, customer, paid/pending - the rest lives in the modal. */
 function queueCardHtml(order, isNext) {
   const isNew = minutesAgo(order.createdAt) < 2;
   const paid = order.paymentStatus === 'paid';
   return `
-    <article class="pop-in flex flex-col rounded-2xl border border-stone-200 bg-white p-2.5 shadow-sm sm:p-3 ${
+    <article class="pop-in rounded-2xl border border-stone-200 bg-white p-2.5 shadow-sm sm:p-3 ${
       isNext ? 'ring-2 ring-stone-900' : ''
     } ${isNew ? 'flash-new border-amber-400' : ''}">
       <div class="flex items-start justify-between gap-2">
@@ -347,54 +356,41 @@ function queueCardHtml(order, isNext) {
         )}">${esc(elapsedLabel(order.createdAt))}</span>
       </div>
 
-      <div class="mt-2 flex flex-col gap-1.5">
+      <div class="mt-2">
         <button type="button" data-details="${order.id}" class="btn btn-secondary btn-md h-9 w-full text-[11px] sm:h-10">
           ${icon('receipt', 'h-3.5 w-3.5 sm:h-4 sm:w-4')} View Order
-        </button>
-        <button type="button" data-start="${order.id}" class="btn btn-md btn-primary h-9 w-full text-[11px] sm:h-10">
-          ${icon('fire', 'h-3.5 w-3.5 sm:h-4 sm:w-4')} Cook
         </button>
       </div>
     </article>`;
 }
 
-/** Cooking card: number and customer only, with a tick box for the batch serve. */
+/** Cooking card: number and customer only, plus the button that opens the modal. */
 function cookingCardHtml(order) {
-  const checked = cookChecked.has(order.id);
+  const { ticked, total, all } = dishProgress(order);
   return `
     <article class="pop-in rounded-2xl border p-2.5 shadow-sm transition-colors sm:p-3 ${
-      checked ? 'border-emerald-400 bg-emerald-50' : 'border-stone-200 bg-white'
+      all ? 'border-emerald-300 bg-emerald-50' : 'border-stone-200 bg-white'
     }">
-      <label class="flex cursor-pointer items-start gap-2.5">
-        <input type="checkbox" data-check="${order.id}" ${checked ? 'checked' : ''}
-          class="mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded border-stone-300 accent-emerald-600">
-        <span class="min-w-0">
-          <span class="block text-xl font-extrabold leading-none tracking-tight sm:text-2xl">${esc(order.numberLabel)}</span>
-          <span class="mt-0.5 block truncate text-xs font-bold text-stone-700 sm:text-sm">${esc(order.customerName)}</span>
-        </span>
-      </label>
-    </article>`;
-}
-
-/** Batch serve footer: the button unlocks only when every order is ticked. */
-function serveFooterHtml(cooking) {
-  const ticked = cooking.filter((order) => cookChecked.has(order.id)).length;
-  const ready = cooking.length > 0 && ticked === cooking.length;
-  return `
-    <div data-serve-footer class="shrink-0 space-y-1 border-t border-stone-200 p-2 sm:p-2.5">
-      <button type="button" data-action="serve-checked" class="btn btn-md btn-success h-10 w-full text-sm sm:h-11 sm:text-base" ${
-        ready ? '' : 'disabled'
-      }>
-        ${icon('check', 'h-4 w-4 sm:h-5 sm:w-5')} Served${cooking.length > 1 ? ` (${ticked}/${cooking.length})` : ''}
-      </button>
-      <p class="text-center text-[11px] text-stone-500 sm:text-xs">
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0">
+          <p class="text-xl font-extrabold leading-none tracking-tight sm:text-2xl">${esc(order.numberLabel)}</p>
+          <p class="mt-0.5 truncate text-xs font-bold text-stone-700 sm:text-sm">${esc(order.customerName)}</p>
+        </div>
         ${
-          ready
-            ? 'All ticked - tap Served to finish.'
-            : 'Tick each order when its plate is ready, then tap Served.'
+          ticked > 0
+            ? `<span class="badge shrink-0 px-1.5 py-0.5 text-[10px] sm:text-[11px] ${
+                all ? 'bg-emerald-100 text-emerald-900' : 'bg-stone-100 text-stone-600'
+              }">${ticked}/${total} cooked</span>`
+            : ''
         }
-      </p>
-    </div>`;
+      </div>
+
+      <div class="mt-2">
+        <button type="button" data-view="${order.id}" class="btn btn-secondary btn-md h-9 w-full text-[11px] sm:h-10">
+          ${icon('clipboard', 'h-3.5 w-3.5 sm:h-4 sm:w-4')} View
+        </button>
+      </div>
+    </article>`;
 }
 
 function setBusy(value) {
@@ -406,9 +402,9 @@ function setBusy(value) {
 // Modals
 // ---------------------------------------------------------------------------
 
-/** Full order for one queue card - the list the cook works from. */
+/** Queue order: every dish, with "Cook" where Close used to be. */
 function openOrderModal(order) {
-  openModal({
+  const modal = openModal({
     title: `Order ${order.numberLabel}`,
     size: 'md',
     content: `
@@ -451,7 +447,126 @@ function openOrderModal(order) {
         }
       </div>`,
     footer: `
-      <button type="button" class="btn btn-lg btn-primary" data-action="close">Close</button>`,
+      <button type="button" class="btn btn-lg btn-primary" data-action="cook-start">
+        ${icon('fire', 'w-5 h-5')} Cook
+      </button>`,
+  });
+
+  modal.footer.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-action="cook-start"]');
+    if (!button) return;
+    await withButtonLoading(button, 'Starting...', async () => {
+      try {
+        const data = await api(`/orders/${order.id}/start`, { method: 'POST' });
+        // Update the board from the response itself - the card moves to
+        // "Now Cooking" the instant the server confirms, with no refetch.
+        applyOrder(data && data.order);
+        toast(`${order.numberLabel} is now cooking.`, 'success');
+        modal.close();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+  });
+}
+
+/** Cooking order: tick every dish; "Done" unlocks when all of them are ticked. */
+function openCookingModal(order) {
+  const bodyHtml = () => {
+    const { ticked, total } = dishProgress(order);
+    return `
+      <div class="space-y-4">
+        <div class="flex flex-wrap items-center gap-2">
+          ${
+            order.paymentStatus === 'paid'
+              ? '<span class="badge bg-emerald-100 px-2 py-0.5 text-xs text-emerald-900">PAID</span>'
+              : '<span class="badge bg-red-100 px-2 py-0.5 text-xs text-red-900">PENDING</span>'
+          }
+          ${typeBadge(order.orderType)}
+          <span class="text-xs font-semibold text-stone-500">${esc(elapsedLabel(order.createdAt))}</span>
+        </div>
+
+        <div class="rounded-xl border border-stone-200 px-4 py-3">
+          <p class="text-xs font-bold uppercase tracking-wide text-stone-500">Customer</p>
+          <p class="text-lg font-extrabold">${esc(order.customerName)}</p>
+        </div>
+
+        <div class="overflow-hidden rounded-xl border border-stone-200">
+          <ul class="divide-y divide-stone-100">
+            ${order.items
+              .map(
+                (item, index) => `<li class="flex items-center gap-3 px-4 py-3">
+                  <input type="checkbox" data-cook-index="${index}" ${cookedItems.get(order.id) && cookedItems.get(order.id).has(String(index)) ? 'checked' : ''}
+                    class="h-5 w-5 shrink-0 cursor-pointer rounded border-stone-300 accent-emerald-600">
+                  <span class="text-base font-semibold sm:text-lg">${esc(item.name)}</span>
+                </li>`
+              )
+              .join('')}
+          </ul>
+        </div>
+
+        <p class="text-center text-sm text-stone-500">
+          Tick each dish when it is cooked. "Done" unlocks when all ${total} dish${total === 1 ? ' is' : 'es are'} ticked.
+          <span class="font-bold"> ${ticked}/${total} ticked.</span>
+        </p>
+      </div>`;
+  };
+
+  const footerHtml = () => {
+    const { all } = dishProgress(order);
+    return `
+      <button type="button" class="btn btn-lg btn-primary" data-action="cook-done" ${all ? '' : 'disabled'}>
+        ${icon('check', 'w-5 h-5')} Done
+      </button>`;
+  };
+
+  const modal = openModal({
+    title: `Order ${order.numberLabel}`,
+    size: 'md',
+    content: bodyHtml(),
+    footer: footerHtml(),
+  });
+
+  const refreshModal = () => {
+    modal.setBody(bodyHtml());
+    modal.footer.innerHTML = footerHtml();
+  };
+
+  modal.body.addEventListener('change', (event) => {
+    const box = event.target.closest('[data-cook-index]');
+    if (!box) return;
+    const index = Number(box.getAttribute('data-cook-index'));
+    let set = cookedItems.get(order.id);
+    if (!set) {
+      set = new Set();
+      cookedItems.set(order.id, set);
+    }
+    if (box.checked) set.add(String(index));
+    else set.delete(String(index));
+    if (!set.size) cookedItems.delete(order.id);
+    refreshModal();
+    renderBoard();
+  });
+
+  modal.footer.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-action="cook-done"]');
+    if (!button || button.disabled) return;
+    await withButtonLoading(button, 'Serving...', async () => {
+      const fresh = orders.find((entry) => entry.id === order.id);
+      if (!fresh) {
+        toast('This order is no longer on the board.', 'warning');
+        modal.close();
+        return;
+      }
+      try {
+        const data = await api(`/orders/${order.id}/serve`, { method: 'POST' });
+        applyOrder(data && data.order);
+        toast(`${fresh.numberLabel} served.`, 'success');
+        modal.close();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
   });
 }
 
@@ -505,31 +620,6 @@ function updateElapsed() {
 // Actions
 // ---------------------------------------------------------------------------
 
-/** Ticking a cooking order only updates the card and the Served button. */
-function handleCheckChange(event) {
-  const box = event.target.closest('[data-check]');
-  if (!box) return;
-  const id = box.getAttribute('data-check');
-  if (box.checked) cookChecked.add(id);
-  else cookChecked.delete(id);
-
-  const card = box.closest('article');
-  if (card) {
-    card.classList.toggle('border-emerald-400', box.checked);
-    card.classList.toggle('bg-emerald-50', box.checked);
-    card.classList.toggle('border-stone-200', !box.checked);
-    card.classList.toggle('bg-white', !box.checked);
-  }
-  updateServeFooter();
-}
-
-function updateServeFooter() {
-  const wrap = rootEl && rootEl.querySelector('[data-serve-footer]');
-  if (!wrap) return;
-  const cooking = orders.filter((order) => order.status === 'preparing');
-  wrap.outerHTML = cooking.length ? serveFooterHtml(cooking) : '';
-}
-
 async function handleClick(event) {
   const detailsButton = event.target.closest('[data-details]');
   if (detailsButton) {
@@ -538,41 +628,10 @@ async function handleClick(event) {
     return;
   }
 
-  const startButton = event.target.closest('[data-start]');
-  if (startButton) {
-    const id = startButton.getAttribute('data-start');
-    const order = orders.find((entry) => entry.id === id);
-    await withButtonLoading(startButton, 'Starting...', async () => {
-      try {
-        const data = await api(`/orders/${id}/start`, { method: 'POST' });
-        // Update the board from the response itself - the card moves to
-        // "Now Cooking" the instant the server confirms, with no refetch.
-        applyOrder(data && data.order);
-        toast(order ? `${order.numberLabel} is now cooking.` : 'Order is now cooking.', 'success');
-      } catch (err) {
-        toast(err.message, 'error');
-      }
-    });
-    return;
-  }
-
-  const serveButton = event.target.closest('[data-action="serve-checked"]');
-  if (serveButton) {
-    const cooking = orders.filter((order) => order.status === 'preparing' && cookChecked.has(order.id));
-    if (!cooking.length) return;
-    await withButtonLoading(serveButton, 'Serving...', async () => {
-      let served = 0;
-      for (const order of cooking) {
-        try {
-          const data = await api(`/orders/${order.id}/serve`, { method: 'POST' });
-          applyOrder(data && data.order);
-          served += 1;
-        } catch (err) {
-          toast(`${order.numberLabel}: ${err.message}`, 'error');
-        }
-      }
-      if (served) toast(`${served} order${served === 1 ? '' : 's'} served.`, 'success');
-    });
+  const viewButton = event.target.closest('[data-view]');
+  if (viewButton) {
+    const order = orders.find((entry) => entry.id === viewButton.getAttribute('data-view'));
+    if (order) openCookingModal(order);
     return;
   }
 
