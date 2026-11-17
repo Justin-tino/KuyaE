@@ -148,7 +148,7 @@ startMessageRetention();
 
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log('');
-  console.log('  Kuya E Tapsilogan POS');
+  console.log('  Kuya E POS');
   console.log(`  http://localhost:${config.port}`);
   console.log(`  Supabase:      ${config.configured ? 'configured' : 'NOT configured (setup screen will show)'}`);
   console.log(`  Timezone:      ${config.timezone}`);

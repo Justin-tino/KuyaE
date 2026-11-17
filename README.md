@@ -1,6 +1,6 @@
-# Kuya E Tapsilogan - Point of Sale
+# Kuya E - Point of Sale
 
-A complete, tablet-friendly POS for a tapsilogan: cashier order taking, kitchen queue, and admin
+A complete, tablet-friendly POS for a food business: cashier order taking, kitchen queue, and admin
 sales/menu/staff management. Built with Node.js, Supabase (database + photo storage) and Tailwind CSS.
 Runs on the Render free tier.
 

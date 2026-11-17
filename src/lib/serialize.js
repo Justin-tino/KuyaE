@@ -113,7 +113,7 @@ function serializeUser(row) {
 
 function serializeSettings(row) {
   return {
-    restaurantName: (row && row.restaurant_name) || 'Kuya E Tapsilogan',
+    restaurantName: (row && row.restaurant_name) || 'Kuya E',
     address: (row && row.address) || '',
     phone: (row && row.phone) || '',
     receiptFooter: (row && row.receipt_footer) || 'Thank you, come again!',

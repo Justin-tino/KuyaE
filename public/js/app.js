@@ -351,10 +351,10 @@ async function enterApp(user) {
   try {
     const data = await api('/settings');
     state.settings = data.settings;
-    document.title = `${data.settings.restaurantName} - POS`;
+    document.title = shortName(data.settings);
   } catch {
     state.settings = state.settings || {
-      restaurantName: (state.status && state.status.restaurantName) || 'Kuya E Tapsilogan',
+      restaurantName: (state.status && state.status.restaurantName) || 'Kuya E',
       address: '',
       phone: '',
       receiptFooter: 'Thank you, come again!',
@@ -391,7 +391,7 @@ function renderShell() {
           <div class="flex items-center gap-3 border-b border-stone-200 px-5 py-4">
             <img src="/images/logo.png" alt="Logo" class="h-12 w-12 shrink-0 object-contain">
             <div class="min-w-0">
-              <p id="shop-name" class="truncate text-lg font-extrabold leading-tight" title="${esc(settings.restaurantName || 'Tapsilogan')}">${esc(shortName(settings))}</p>
+              <p id="shop-name" class="truncate text-lg font-extrabold leading-tight" title="${esc(settings.restaurantName || 'Kuya E')}">${esc(shortName(settings))}</p>
               <p class="text-xs font-bold uppercase tracking-wider text-stone-400">Point of Sale</p>
             </div>
           </div>
@@ -483,7 +483,7 @@ function renderShell() {
           shopName.textContent = shortName(data.settings);
           shopName.title = data.settings.restaurantName;
         }
-        document.title = `${data.settings.restaurantName} - POS`;
+        document.title = shortName(data.settings);
       } catch {
         /* ignore */
       }

@@ -2,7 +2,7 @@
   "name": "kuyae-pos",
   "version": "1.0.0",
   "private": true,
-  "description": "Point of Sale system for Kuya E Tapsilogan - Node.js, Supabase, Tailwind CSS, deployable on Render free tier.",
+  "description": "Point of Sale system for Kuya E - Node.js, Supabase, Tailwind CSS, deployable on Render free tier.",
   "main": "src/server.js",
   "engines": {
     "node": ">=20"

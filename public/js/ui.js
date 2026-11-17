@@ -442,12 +442,12 @@ export function userPill(user) {
 
 /**
  * Compact brand name for tight spots (sidebar, small headers) and the
- * sign-in screen: the first two words of the restaurant name, so
- * "Kuya E Tapsilogan" shows as "Kuya E".
+ * sign-in screen: the first two words of the restaurant name, so a longer
+ * name still shows as a compact brand.
  * The full name stays on receipts and reports.
  */
 export function shortName(settings) {
-  const full = ((settings && settings.restaurantName) || 'Kuya E Tapsilogan').trim();
+  const full = ((settings && settings.restaurantName) || 'Kuya E').trim();
   const words = full.split(/\s+/);
   return words.length > 2 ? words.slice(0, 2).join(' ') : full;
 }

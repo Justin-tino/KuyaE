@@ -63,13 +63,17 @@ create index if not exists sessions_user_id_idx on public.sessions (user_id);
 -- ---------------------------------------------------------------------------
 create table if not exists public.settings (
   id integer primary key default 1 check (id = 1),
-  restaurant_name text not null default 'Kuya E Tapsilogan',
+  restaurant_name text not null default 'Kuya E',
   address text not null default '',
   phone text not null default '',
   receipt_footer text not null default 'Thank you, come again!',
   updated_at timestamptz not null default now()
 );
 insert into public.settings (id) values (1) on conflict (id) do nothing;
+-- Older installs were seeded with the previous brand name; rename only that
+-- untouched default so a customised name is never overwritten.
+update public.settings set restaurant_name = 'Kuya E'
+  where id = 1 and restaurant_name = 'Kuya E Tapsilogan';
 
 -- E-wallet QR code (uploaded by an admin; shown to cashiers on online payments)
 alter table public.settings add column if not exists qr_code_path text;

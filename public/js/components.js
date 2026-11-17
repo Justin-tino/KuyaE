@@ -525,7 +525,7 @@ function settingsHeader(settings) {
   const s = settings || {};
   return `
     <div class="center"><img src="/images/logo.png" alt="" class="logo"></div>
-    <div class="center shop-name">${esc(s.restaurantName || 'Tapsilogan')}</div>
+    <div class="center shop-name">${esc(s.restaurantName || 'Kuya E')}</div>
     ${s.address ? `<div class="center small">${esc(s.address)}</div>` : ''}
     ${s.phone ? `<div class="center small">${esc(s.phone)}</div>` : ''}`;
 }
