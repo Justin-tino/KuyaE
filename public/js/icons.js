@@ -42,6 +42,9 @@ const ICONS = {
   upload: '<path d="M12 16V4.5"/><path d="M7.5 9L12 4.5 16.5 9"/><path d="M4.5 15v3.5a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V15"/>',
   cart: '<path d="M3 4.5h2.2l2.2 11h10.8l2-8.5H6.1"/><circle cx="9.5" cy="19.5" r="1.4"/><circle cx="16.5" cy="19.5" r="1.4"/>',
   bowl: '<path d="M4 11.5h16a8 8 0 0 1-16 0z"/><path d="M3 11.5h18"/><path d="M8.2 8c0-1.4 1.7-1.4 1.7-2.8"/><path d="M12.2 8c0-1.4 1.7-1.4 1.7-2.8"/><path d="M16.2 8c0-1.4 1.7-1.4 1.7-2.8"/>',
+  message:
+    '<path d="M4 5.5h16v11H12l-4.5 3.5v-3.5H4z"/><path d="M8 9.5h8"/><path d="M8 12.5h5"/>',
+  send: '<path d="M4.5 12L20 4.5l-4 15-4.5-5.5z"/><path d="M11.5 14l8.5-9.5"/>',
   eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
   eyeOff:
     '<path d="M17.9 17.9A10 10 0 0 1 12 20c-7 0-11-8-11-8a18.4 18.4 0 0 1 5.1-5.9"/><path d="M9.9 4.2A9 9 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.2 3.2"/><path d="M14.1 14.1a3 3 0 1 1-4.2-4.2"/><path d="M2.5 2.5l19 19"/>',
@@ -61,6 +64,7 @@ const ICONS = {
   home: '<path d="M4 11l8-7 8 7"/><path d="M6 9.5V20h12V9.5"/><path d="M10 20v-5h4v5"/>',
   doc: '<path d="M13.5 3.5h-7A1.5 1.5 0 0 0 5 5v14A1.5 1.5 0 0 0 6.5 20.5h11A1.5 1.5 0 0 0 19 19V9z"/><path d="M13.5 3.5V9H19"/><path d="M9 13h6"/><path d="M9 16.5h6"/>',
   dot: '<circle cx="12" cy="12" r="3"/>',
+  qr: '<rect x="3.5" y="3.5" width="6" height="6" rx="1.2"/><rect x="14.5" y="3.5" width="6" height="6" rx="1.2"/><rect x="3.5" y="14.5" width="6" height="6" rx="1.2"/><path d="M14.5 14.5h3v3h-3z"/><path d="M20.5 17h-3"/><path d="M17 20.5h3.5"/>',
 };
 
 export function icon(name, cls = 'w-6 h-6') {

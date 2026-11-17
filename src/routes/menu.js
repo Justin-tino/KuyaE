@@ -1,31 +1,16 @@
 'use strict';
 
 const express = require('express');
-const crypto = require('crypto');
-const multer = require('multer');
 const { z } = require('zod');
-const { config } = require('../config');
 const { getClient, friendlyDbError } = require('../supabase');
 const { auditLog } = require('../lib/audit');
 const { cleanText, firstZodError, isUuid, toCents } = require('../lib/helpers');
 const { serializeMenuItem } = require('../lib/serialize');
+const { singleImage, uploadError, saveImage, removeImage } = require('../lib/imageUpload');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { publishChange } = require('../realtime');
 
 const router = express.Router();
-
-const ALLOWED_IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
-  fileFilter(req, file, cb) {
-    if (!ALLOWED_IMAGE_TYPES[file.mimetype]) {
-      return cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'image'));
-    }
-    return cb(null, true);
-  },
-});
 
 const priceSchema = z.coerce
   .number({ invalid_type_error: 'Price must be a number' })
@@ -46,81 +31,6 @@ const menuSchema = z.object({
 
 const MENU_SELECT = 'id, name, description, category, price, image_path, image_url, is_available, created_at, updated_at';
 
-function uploadError(res, err) {
-  if (err instanceof multer.MulterError) {
-    if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ error: 'The photo is too large. Maximum size is 5 MB.' });
-    }
-    return res.status(400).json({ error: 'Only JPG, PNG or WebP photos are allowed.' });
-  }
-  if (err && err.friendly) {
-    return res.status(504).json({ error: err.message });
-  }
-  return res.status(500).json({ error: friendlyDbError(err) });
-}
-
-// A stuck photo upload must answer with a clear error, not spin forever.
-const PHOTO_UPLOAD_TIMEOUT_MS = 45000;
-
-function withTimeout(promise, ms, message) {
-  let timer = null;
-  const guard = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      const err = new Error(message);
-      err.friendly = true;
-      reject(err);
-    }, ms);
-  });
-  return Promise.race([promise, guard]).finally(() => clearTimeout(timer));
-}
-
-/** Upload a menu photo to the Supabase storage bucket (creates it if missing). */
-async function saveMenuImage(sb, file) {
-  const ext = ALLOWED_IMAGE_TYPES[file.mimetype];
-  const path = `${crypto.randomUUID()}.${ext}`;
-  const options = { contentType: file.mimetype, upsert: false, cacheControl: '31536000' };
-  const timeoutMessage =
-    'The photo upload is taking too long. Please check the internet connection and try again.';
-
-  let { error } = await withTimeout(
-    sb.storage.from(config.bucket).upload(path, file.buffer, options),
-    PHOTO_UPLOAD_TIMEOUT_MS,
-    timeoutMessage
-  );
-  if (error && /bucket not found/i.test(error.message || '')) {
-    try {
-      await sb.storage.createBucket(config.bucket, {
-        public: true,
-        fileSizeLimit: 5242880,
-        allowedMimeTypes: Object.keys(ALLOWED_IMAGE_TYPES),
-      });
-    } catch {
-      /* ignored - retry below reports the real error */
-    }
-    ({ error } = await withTimeout(
-      sb.storage.from(config.bucket).upload(path, file.buffer, options),
-      PHOTO_UPLOAD_TIMEOUT_MS,
-      timeoutMessage
-    ));
-  }
-  if (error) {
-    if (error.friendly) throw error;
-    throw new Error(friendlyDbError(error));
-  }
-
-  const { data } = sb.storage.from(config.bucket).getPublicUrl(path);
-  return { path, url: data.publicUrl };
-}
-
-async function removeMenuImage(sb, path) {
-  if (!path) return;
-  try {
-    await sb.storage.from(config.bucket).remove([path]);
-  } catch (err) {
-    console.warn('[menu] could not remove old image:', err.message);
-  }
-}
-
 /** GET /api/menu - everyone signed in can see the menu. */
 router.get('/', requireAuth, async (req, res, next) => {
   try {
@@ -136,7 +46,7 @@ router.get('/', requireAuth, async (req, res, next) => {
 });
 
 /** POST /api/menu - admin only. Multipart (with photo) or plain JSON. */
-router.post('/', requireAuth, requireRole('admin'), upload.single('image'), async (req, res, next) => {
+router.post('/', requireAuth, requireRole('admin'), singleImage('image'), async (req, res, next) => {
   try {
     const body = req.body || {};
     const parsed = menuSchema.safeParse({
@@ -152,7 +62,7 @@ router.post('/', requireAuth, requireRole('admin'), upload.single('image'), asyn
     let image = { path: null, url: null };
     if (req.file) {
       try {
-        image = await saveMenuImage(sb, req.file);
+        image = await saveImage(sb, req.file, 'menu');
       } catch (err) {
         return uploadError(res, err);
       }
@@ -186,7 +96,7 @@ router.post('/', requireAuth, requireRole('admin'), upload.single('image'), asyn
 });
 
 /** PATCH /api/menu/:id - admin only. */
-router.patch('/:id', requireAuth, requireRole('admin'), upload.single('image'), async (req, res, next) => {
+router.patch('/:id', requireAuth, requireRole('admin'), singleImage('image'), async (req, res, next) => {
   try {
     const { id } = req.params;
     if (!isUuid(id)) return res.status(400).json({ error: 'Invalid menu item.' });
@@ -222,7 +132,7 @@ router.patch('/:id', requireAuth, requireRole('admin'), upload.single('image'), 
     let oldImagePath = null;
     if (req.file) {
       try {
-        const image = await saveMenuImage(sb, req.file);
+        const image = await saveImage(sb, req.file, 'menu');
         updates.image_path = image.path;
         updates.image_url = image.url;
         oldImagePath = existing.image_path;
@@ -243,7 +153,7 @@ router.patch('/:id', requireAuth, requireRole('admin'), upload.single('image'), 
     const { data, error } = await sb.from('menu_items').update(updates).eq('id', id).select(MENU_SELECT).single();
     if (error) return res.status(500).json({ error: friendlyDbError(error) });
     // Best-effort cleanup after the response - the item is already saved.
-    if (oldImagePath) removeMenuImage(sb, oldImagePath);
+    if (oldImagePath) removeImage(sb, oldImagePath);
 
     auditLog(req, 'menu_update', 'menu_item', id, {
       name: data.name,
@@ -274,7 +184,7 @@ router.delete('/:id', requireAuth, requireRole('admin'), async (req, res, next) 
 
     const { error } = await sb.from('menu_items').delete().eq('id', id);
     if (error) return res.status(500).json({ error: friendlyDbError(error) });
-    removeMenuImage(sb, existing.image_path);
+    removeImage(sb, existing.image_path);
 
     auditLog(req, 'menu_delete', 'menu_item', id, { name: existing.name, category: existing.category });
     publishChange('menu_items', 'DELETE');

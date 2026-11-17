@@ -36,7 +36,17 @@ let pollFailures = 0;
 // One channel per table. Supabase Realtime only reliably registers a single
 // postgres_changes binding per channel, so bundling every table into one
 // channel silently drops most events.
-const REALTIME_TABLES = ['orders', 'order_items', 'menu_items', 'users', 'settings', 'audit_logs'];
+const REALTIME_TABLES = [
+  'orders',
+  'order_items',
+  'menu_items',
+  'users',
+  'settings',
+  'audit_logs',
+  'staff_meals',
+  'conversations',
+  'messages',
+];
 
 // Orders drive the live kitchen / cashier screens, so they are polled quickly.
 const ORDER_POLL_MS = 4000;
@@ -68,6 +78,9 @@ function sanitizeRecord(table, record) {
     return out;
   }
   if (table === 'sessions') return null;
+  // Chat rows are private. Browsers only get a "something changed" signal and
+  // then refetch their own conversations through the API, which checks access.
+  if (table === 'messages' || table === 'conversations') return null;
   return record;
 }
 
@@ -262,6 +275,10 @@ async function pollSlowTables() {
     ['users', 'updated_at'],
     ['settings', 'updated_at'],
     ['audit_logs', 'created_at'],
+    ['staff_meals', 'created_at'],
+    // Chat activity updates last_message_at, and deletes change the row count,
+    // so one signature catches new messages and 24-hour cleanups alike.
+    ['conversations', 'last_message_at'],
   ];
   const results = await Promise.all(
     tables.map(([table, timeCol]) => tableSignature(sb, table, timeCol).catch(() => null))

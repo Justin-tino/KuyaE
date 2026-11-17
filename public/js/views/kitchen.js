@@ -17,6 +17,7 @@ import { onTables, onEvent, everyWhileVisible } from '../realtime.js';
 import { typeBadge } from '../components.js';
 import {
   esc,
+  money,
   toast,
   toastThrottled,
   emptyState,
@@ -34,6 +35,8 @@ const FALLBACK_REFRESH_MS = 12000;
 
 let orders = [];
 let servedToday = [];
+let servedCount = 0;
+let servedTotalCents = 0;
 let rootEl = null;
 let elapsedTimer = null;
 let boardSignature = '';
@@ -48,6 +51,8 @@ export async function mount(container) {
   rootEl = container;
   orders = [];
   servedToday = [];
+  servedCount = 0;
+  servedTotalCents = 0;
   boardSignature = '';
   hasData = false;
   loadError = '';
@@ -89,6 +94,10 @@ async function refresh(quiet) {
     const data = await api('/orders/kitchen');
     orders = data.orders || [];
     servedToday = data.servedToday || [];
+    servedCount = Number.isFinite(data.servedCount) ? data.servedCount : servedToday.length;
+    servedTotalCents = Number.isFinite(data.servedTotalCents)
+      ? data.servedTotalCents
+      : servedToday.reduce((sum, order) => sum + (order.totalCents || 0), 0);
     loadError = '';
     hasData = true;
     pruneCooked();
@@ -113,8 +122,13 @@ async function refresh(quiet) {
 function applyOrder(updated) {
   if (!updated || !updated.id) return;
   const index = orders.findIndex((entry) => entry.id === updated.id);
+  const alreadyServed = servedToday.some((entry) => entry.id === updated.id);
   if (updated.status === 'served') {
     if (index >= 0) orders.splice(index, 1);
+    if (!alreadyServed) {
+      servedCount += 1;
+      servedTotalCents += updated.totalCents || 0;
+    }
     servedToday = [updated, ...servedToday.filter((entry) => entry.id !== updated.id)];
   } else if (updated.status === 'cancelled') {
     if (index >= 0) orders.splice(index, 1);
@@ -169,6 +183,8 @@ function computeSignature() {
       o.items.map((i) => `${i.quantity}x${i.name}`).join(','),
     ]),
     served: servedToday.length,
+    servedCount,
+    servedTotalCents,
   });
 }
 
@@ -290,7 +306,12 @@ function toolbarHtml(queue, cooking) {
       <div class="stat-chip">
         ${icon('check', 'w-4 h-4 text-emerald-600')}
         <span class="text-[11px] font-bold uppercase tracking-wide text-stone-500 sm:text-xs">Served Today</span>
-        <span class="text-base font-extrabold text-emerald-700 sm:text-lg">${servedToday.length}</span>
+        <span class="text-base font-extrabold text-emerald-700 sm:text-lg">${servedCount}</span>
+      </div>
+      <div class="stat-chip" title="Total value of orders served today">
+        ${icon('cash', 'w-4 h-4 text-emerald-600')}
+        <span class="text-[11px] font-bold uppercase tracking-wide text-stone-500 sm:text-xs">Today's Total</span>
+        <span class="text-base font-extrabold text-emerald-700 sm:text-lg">${money(servedTotalCents)}</span>
       </div>
 
       <div class="ml-auto flex items-center gap-1.5 sm:gap-2">
@@ -572,38 +593,44 @@ function openCookingModal(order) {
 
 function openServedModal() {
   openModal({
-    title: `Served today (${servedToday.length})`,
+    title: `Served today (${servedCount})`,
     size: 'lg',
     content: servedToday.length
-      ? `<div class="overflow-x-auto">
-          <table class="w-full">
-            <thead class="bg-stone-50">
-              <tr>
-                <th class="th">Order</th>
-                <th class="th">Customer</th>
-                <th class="th">Type</th>
-                <th class="th">Payment</th>
-                <th class="th text-right">Served at</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${servedToday
-                .map(
-                  (order) => `<tr class="border-b border-stone-100 last:border-0">
-                    <td class="td font-extrabold">${esc(order.numberLabel)}</td>
-                    <td class="td">${esc(order.customerName)}</td>
-                    <td class="td">${typeBadge(order.orderType)}</td>
-                    <td class="td">${
-                      order.paymentStatus === 'paid'
-                        ? '<span class="badge bg-emerald-100 text-emerald-900">Paid</span>'
-                        : '<span class="badge bg-red-100 text-red-900">Unpaid</span>'
-                    }</td>
-                    <td class="td text-right">${esc(fmtTime(order.servedAt))}</td>
-                  </tr>`
-                )
-                .join('')}
-            </tbody>
-          </table>
+      ? `<div class="space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-emerald-50 px-4 py-3 text-emerald-900">
+            <span class="text-sm font-bold uppercase tracking-wide">Total served today</span>
+            <span class="text-2xl font-extrabold">${money(servedTotalCents)}</span>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full">
+              <thead class="bg-stone-50">
+                <tr>
+                  <th class="th">Order</th>
+                  <th class="th">Customer</th>
+                  <th class="th">Type</th>
+                  <th class="th">Payment</th>
+                  <th class="th text-right">Served at</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${servedToday
+                  .map(
+                    (order) => `<tr class="border-b border-stone-100 last:border-0">
+                      <td class="td font-extrabold">${esc(order.numberLabel)}</td>
+                      <td class="td">${esc(order.customerName)}</td>
+                      <td class="td">${typeBadge(order.orderType)}</td>
+                      <td class="td">${
+                        order.paymentStatus === 'paid'
+                          ? '<span class="badge bg-emerald-100 text-emerald-900">Paid</span>'
+                          : '<span class="badge bg-red-100 text-red-900">Unpaid</span>'
+                      }</td>
+                      <td class="td text-right">${esc(fmtTime(order.servedAt))}</td>
+                    </tr>`
+                  )
+                  .join('')}
+              </tbody>
+            </table>
+          </div>
         </div>`
       : emptyState('check', 'Nothing served yet', 'Orders marked as served show up here.'),
   });

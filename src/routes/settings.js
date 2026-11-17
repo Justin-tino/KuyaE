@@ -7,11 +7,13 @@ const { getClient, friendlyDbError } = require('../supabase');
 const { auditLog } = require('../lib/audit');
 const { cleanText, firstZodError } = require('../lib/helpers');
 const { serializeSettings } = require('../lib/serialize');
+const { singleImage, uploadError, saveImage, removeImage } = require('../lib/imageUpload');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { publishChange } = require('../realtime');
 
 const router = express.Router();
 
-const SETTINGS_SELECT = 'restaurant_name, address, phone, receipt_footer';
+const SETTINGS_SELECT = 'restaurant_name, address, phone, receipt_footer, qr_code_path, qr_code_url';
 
 /** GET /api/settings - any signed-in user (used on receipts and headers). */
 router.get('/', requireAuth, async (req, res, next) => {
@@ -59,6 +61,83 @@ router.patch('/', requireAuth, requireRole('admin'), async (req, res, next) => {
     if (error) return res.status(500).json({ error: friendlyDbError(error) });
 
     auditLog(req, 'settings_update', 'settings', '1', { restaurantName: data.restaurant_name });
+    const settings = serializeSettings(data);
+    settings.timezone = config.timezone;
+    return res.json({ settings });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/** POST /api/settings/qr - admin only. Upload (or replace) the e-wallet QR code. */
+router.post('/qr', requireAuth, requireRole('admin'), singleImage('qr'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Please choose a QR code image to upload.' });
+
+    const sb = getClient();
+    let image;
+    try {
+      image = await saveImage(sb, req.file, 'qr');
+    } catch (err) {
+      return uploadError(res, err);
+    }
+
+    const { data: existing, error: findError } = await sb
+      .from('settings')
+      .select('qr_code_path')
+      .eq('id', 1)
+      .maybeSingle();
+    if (findError) return res.status(503).json({ error: friendlyDbError(findError) });
+
+    const { data, error } = await sb
+      .from('settings')
+      .update({ qr_code_path: image.path, qr_code_url: image.url })
+      .eq('id', 1)
+      .select(SETTINGS_SELECT)
+      .single();
+    if (error) return res.status(500).json({ error: friendlyDbError(error) });
+
+    auditLog(req, 'settings_update', 'settings', '1', { qrCode: 'uploaded' });
+    // Best-effort cleanup - the new QR code is already saved.
+    if (existing && existing.qr_code_path && existing.qr_code_path !== image.path) {
+      removeImage(sb, existing.qr_code_path);
+    }
+    publishChange('settings', 'UPDATE');
+
+    const settings = serializeSettings(data);
+    settings.timezone = config.timezone;
+    return res.json({ settings });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/** DELETE /api/settings/qr - admin only. Removes the uploaded QR code. */
+router.delete('/qr', requireAuth, requireRole('admin'), async (req, res, next) => {
+  try {
+    const sb = getClient();
+    const { data: existing, error: findError } = await sb
+      .from('settings')
+      .select('qr_code_path')
+      .eq('id', 1)
+      .maybeSingle();
+    if (findError) return res.status(503).json({ error: friendlyDbError(findError) });
+    if (!existing || !existing.qr_code_path) {
+      return res.status(400).json({ error: 'There is no QR code to remove.' });
+    }
+
+    const { data, error } = await sb
+      .from('settings')
+      .update({ qr_code_path: null, qr_code_url: null })
+      .eq('id', 1)
+      .select(SETTINGS_SELECT)
+      .single();
+    if (error) return res.status(500).json({ error: friendlyDbError(error) });
+
+    auditLog(req, 'settings_update', 'settings', '1', { qrCode: 'removed' });
+    removeImage(sb, existing.qr_code_path);
+    publishChange('settings', 'UPDATE');
+
     const settings = serializeSettings(data);
     settings.timezone = config.timezone;
     return res.json({ settings });

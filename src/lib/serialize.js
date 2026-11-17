@@ -62,6 +62,41 @@ function serializeOrder(row) {
   };
 }
 
+/**
+ * API shape for a free staff meal. Money is always zero: the stored price is
+ * only kept as a menu reference value and is never charged or reported.
+ */
+function serializeStaffMeal(row) {
+  if (!row) return null;
+  const items = (row.items || row.staff_meal_items || [])
+    .slice()
+    .sort((a, b) => (a.line_no || 0) - (b.line_no || 0))
+    .map((i) => ({
+      id: i.id,
+      menuItemId: i.menu_item_id,
+      name: i.item_name,
+      quantity: i.quantity,
+      unitPriceCents: 0,
+      lineTotalCents: 0,
+      menuPriceCents: toCents(i.unit_price),
+      menuValueCents: toCents(i.line_total),
+    }));
+  const user = row.user || null;
+  return {
+    id: row.id,
+    userId: row.user_id,
+    staffName: row.staff_name || (user && user.full_name) || 'Unknown',
+    staffRole: row.staff_role || (user && user.role) || '',
+    mealDate: row.meal_date,
+    notes: row.notes || '',
+    createdAt: row.created_at,
+    items,
+    itemsCount: items.reduce((sum, item) => sum + item.quantity, 0),
+    menuValueCents: items.reduce((sum, item) => sum + item.menuValueCents, 0),
+    totalCents: 0,
+  };
+}
+
 function serializeUser(row) {
   if (!row) return null;
   return {
@@ -82,6 +117,7 @@ function serializeSettings(row) {
     address: (row && row.address) || '',
     phone: (row && row.phone) || '',
     receiptFooter: (row && row.receipt_footer) || 'Thank you, come again!',
+    qrCodeUrl: (row && row.qr_code_url) || null,
     timezone: null, // filled by the route from config
   };
 }
@@ -105,4 +141,17 @@ const ORDER_SELECT =
   'server:users!orders_served_by_fkey(full_name), ' +
   'cashier:users!orders_paid_by_fkey(full_name)';
 
-module.exports = { serializeMenuItem, serializeOrder, serializeUser, serializeSettings, serializeAuditLog, ORDER_SELECT };
+const STAFF_MEAL_SELECT =
+  '*, items:staff_meal_items(id, menu_item_id, item_name, quantity, unit_price, line_total, line_no), ' +
+  'user:users!staff_meals_user_id_fkey(full_name, username, role)';
+
+module.exports = {
+  serializeMenuItem,
+  serializeOrder,
+  serializeStaffMeal,
+  serializeUser,
+  serializeSettings,
+  serializeAuditLog,
+  ORDER_SELECT,
+  STAFF_MEAL_SELECT,
+};

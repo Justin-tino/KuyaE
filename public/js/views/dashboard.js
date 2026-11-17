@@ -9,15 +9,19 @@ import {
   toast,
   pageLoader,
   fmtDayLabel,
+  fmtTime,
   todayLocalStr,
   addDays,
   debounce,
   renderPreservingFocus,
+  emptyState,
 } from '../ui.js';
 
 let range = { from: todayLocalStr(), to: todayLocalStr() };
 let preset = 'today';
 let report = null;
+// Free staff meals for today (admin view only; never part of sales).
+let staffMeals = null;
 // Summary of the equal-length period right before the selected range.
 let previous = null;
 let loading = true;
@@ -40,7 +44,7 @@ export async function mount(container) {
   const onChange = (event) => handleChange(event);
   container.addEventListener('click', onClick);
   container.addEventListener('change', onChange);
-  const off = onTables(['orders'], debounce(() => load(true), 600));
+  const off = onTables(['orders', 'staff_meals'], debounce(() => load(true), 600));
   await load(false);
   return () => {
     off();
@@ -63,14 +67,18 @@ async function load(quiet) {
   }
   const days = dayCount(range.from, range.to);
   try {
-    const [data, prevData] = await Promise.all([
+    const today = todayLocalStr();
+    const [data, prevData, staffMealData] = await Promise.all([
       api(`/reports/sales?from=${range.from}&to=${range.to}`),
       // Comparison period: the same number of days right before the range.
       api(`/reports/sales?from=${addDays(range.from, -days)}&to=${addDays(range.from, -1)}`).catch(() => null),
+      // Free staff meals are shown for today only and never mixed into sales.
+      api(`/staff-meals?from=${today}&to=${today}`).catch(() => null),
     ]);
     if (seq !== loadSeq) return;
     report = data;
     previous = prevData ? prevData.summary : null;
+    staffMeals = staffMealData;
     loading = false;
     render(quiet);
   } catch (err) {
@@ -534,6 +542,87 @@ function topItemsHtml() {
   </div>`;
 }
 
+/**
+ * Admin-only read-only card: who from the cashier and kitchen teams claimed a
+ * free meal today. The amounts are never part of sales, so only counts and
+ * dishes are shown here.
+ */
+function staffMealsHtml() {
+  const head = `
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 px-5 py-3.5">
+      <div class="flex items-center gap-2.5">
+        <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-stone-100 text-stone-700">${icon('users', 'w-5 h-5')}</span>
+        <div>
+          <h2 class="text-base font-extrabold leading-tight">Staff meals today</h2>
+          <p class="text-xs font-medium text-stone-500">Free meals claimed by cashier and kitchen staff &middot; not counted as sales</p>
+        </div>
+      </div>
+      <a href="#/staff-meals" class="btn btn-secondary btn-sm">
+        View all ${icon('arrowRight', 'w-4 h-4')}
+      </a>
+    </div>`;
+
+  if (!staffMeals) {
+    return `<div class="card overflow-hidden">${head}<p class="px-5 py-6 text-center text-sm font-semibold text-stone-500">Could not load staff meals.</p></div>`;
+  }
+
+  const meals = staffMeals.meals || [];
+  const summary = staffMeals.summary || {};
+  const shown = meals.slice(0, 6);
+  const stat = (label, value, tone) => `
+    <div class="rounded-xl border border-stone-200 px-3 py-2">
+      <p class="text-[10px] font-bold uppercase tracking-wider text-stone-400">${esc(label)}</p>
+      <p class="mt-0.5 text-xl font-extrabold ${tone}">${value}</p>
+    </div>`;
+
+  const rows = shown
+    .map(
+      (meal) => `<li class="flex flex-wrap items-center gap-2 px-5 py-2.5">
+        <div class="min-w-0 flex-1">
+          <p class="truncate text-sm font-bold">${esc(meal.staffName)}</p>
+          <p class="text-xs font-semibold text-stone-500">
+            ${meal.staffRole === 'kitchen' ? 'Kitchen' : 'Cashier'} &middot; ${esc(fmtTime(meal.createdAt))}
+          </p>
+        </div>
+        <div class="flex flex-wrap justify-end gap-1.5">
+          ${meal.items
+            .map(
+              (item) =>
+                `<span class="badge bg-stone-100 text-stone-700">${item.quantity}x ${esc(item.name)}</span>`
+            )
+            .join('')}
+        </div>
+      </li>`
+    )
+    .join('');
+
+  return `<div class="card overflow-hidden">
+    ${head}
+    <div class="grid grid-cols-2 gap-2 p-4 sm:grid-cols-4">
+      ${stat('Meals', summary.totalMeals || 0, 'text-stone-900')}
+      ${stat('Cashier', summary.cashierMeals || 0, 'text-indigo-700')}
+      ${stat('Kitchen', summary.kitchenMeals || 0, 'text-sky-700')}
+      ${stat('Unique staff', summary.uniqueStaff || 0, 'text-emerald-700')}
+    </div>
+    ${
+      shown.length
+        ? `<ul class="divide-y divide-stone-100 border-t border-stone-100">${rows}</ul>
+           ${
+             meals.length > shown.length
+               ? `<p class="border-t border-stone-100 px-5 py-2 text-center text-xs font-semibold text-stone-500">+${meals.length - shown.length} more today &middot; open Staff Meals for the full list</p>`
+               : ''
+           }`
+        : `<div class="border-t border-stone-100">${emptyState(
+            'bowl',
+            'No staff meals today',
+            'Cashier and kitchen staff have not claimed a free meal yet.',
+            '',
+            { compact: true }
+          )}</div>`
+    }
+  </div>`;
+}
+
 function render(quiet) {
   if (!rootEl) return;
 
@@ -543,7 +632,7 @@ function render(quiet) {
       ${
         loading || !report
           ? `<div class="card">${pageLoader('Loading sales...')}</div>`
-          : summaryHtml()
+          : `${summaryHtml()}${staffMealsHtml()}`
       }
     </div>`;
 

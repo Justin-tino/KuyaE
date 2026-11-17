@@ -26,6 +26,38 @@ function parseRangeQuery(query) {
   return { fromDate, toDate, fromIso, toIso };
 }
 
+/**
+ * Accurate count and peso total of the orders served inside a local day.
+ * Pages through the rows so a busy day is never silently cut off by the
+ * PostgREST row cap.
+ */
+async function fetchServedSummary(sb, fromIso, toIso) {
+  const PAGE = 1000;
+  let offset = 0;
+  let count = 0;
+  let totalCents = 0;
+
+  for (;;) {
+    const { data, error } = await sb
+      .from('orders')
+      .select('total')
+      .eq('status', 'served')
+      .gte('served_at', fromIso)
+      .lt('served_at', toIso)
+      .order('served_at', { ascending: true })
+      .range(offset, offset + PAGE - 1);
+    if (error) return { error };
+    if (!data || data.length === 0) break;
+
+    count += data.length;
+    for (const row of data) totalCents += toCents(row.total);
+    if (data.length < PAGE) break;
+    offset += PAGE;
+  }
+
+  return { count, totalCents };
+}
+
 const createOrderSchema = z.object({
   customerName: z.string().trim().max(80).optional().default(''),
   orderType: z.enum(['dine_in', 'take_out'], { errorMap: () => ({ message: 'Choose Dine In or Take Out.' }) }),
@@ -131,13 +163,45 @@ router.get('/pending-payments', requireAuth, requireRole('cashier', 'admin'), as
   }
 });
 
+/** GET /api/orders/pending-summary - tiny payload for the cashier reminder/badge. */
+router.get('/pending-summary', requireAuth, requireRole('cashier', 'admin'), async (req, res, next) => {
+  try {
+    const sb = getClient();
+    const PAGE = 1000;
+    let offset = 0;
+    let count = 0;
+    let totalCents = 0;
+
+    for (;;) {
+      const { data, error } = await sb
+        .from('orders')
+        .select('total')
+        .eq('payment_status', 'pending')
+        .neq('status', 'cancelled')
+        .order('order_number', { ascending: true })
+        .range(offset, offset + PAGE - 1);
+      if (error) return res.status(503).json({ error: friendlyDbError(error) });
+      if (!data || data.length === 0) break;
+
+      count += data.length;
+      for (const row of data) totalCents += toCents(row.total);
+      if (data.length < PAGE) break;
+      offset += PAGE;
+    }
+
+    return res.json({ count, totalCents });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 /** GET /api/orders/kitchen - active orders, first come first served. */
 router.get('/kitchen', requireAuth, requireRole('kitchen', 'admin', 'cashier'), async (req, res, next) => {
   try {
     const sb = getClient();
     const { fromIso, toIso } = dayRange(todayStr(), todayStr());
     // One round trip, not two: the board and the served list load together.
-    const [active, served] = await Promise.all([
+    const [active, served, servedSummary] = await Promise.all([
       sb
         .from('orders')
         .select(ORDER_SELECT)
@@ -152,14 +216,20 @@ router.get('/kitchen', requireAuth, requireRole('kitchen', 'admin', 'cashier'), 
         .lt('served_at', toIso)
         .order('served_at', { ascending: false })
         .limit(100),
+      fetchServedSummary(sb, fromIso, toIso),
     ]);
     if (active.error) return res.status(503).json({ error: friendlyDbError(active.error) });
     if (served.error) return res.status(503).json({ error: friendlyDbError(served.error) });
+    if (servedSummary.error) {
+      return res.status(503).json({ error: friendlyDbError(servedSummary.error) });
+    }
 
     const orders = (active.data || []).map(serializeOrder);
     return res.json({
       orders,
       servedToday: (served.data || []).map(serializeOrder),
+      servedCount: servedSummary.count,
+      servedTotalCents: servedSummary.totalCents,
     });
   } catch (err) {
     return next(err);

@@ -71,6 +71,10 @@ create table if not exists public.settings (
 );
 insert into public.settings (id) values (1) on conflict (id) do nothing;
 
+-- E-wallet QR code (uploaded by an admin; shown to cashiers on online payments)
+alter table public.settings add column if not exists qr_code_path text;
+alter table public.settings add column if not exists qr_code_url text;
+
 -- ---------------------------------------------------------------------------
 -- Menu items (each item can have a photo stored in the "menus" storage bucket)
 -- ---------------------------------------------------------------------------
@@ -140,6 +144,74 @@ create table if not exists public.order_items (
   created_at timestamptz not null default now()
 );
 create index if not exists order_items_order_id_idx on public.order_items (order_id);
+
+-- ---------------------------------------------------------------------------
+-- Staff meals (free meals claimed by cashier/kitchen staff)
+--   These are deliberately NOT orders: they never touch public.orders, so
+--   they can never affect sales totals, reports or order numbers.
+--   One free meal per employee per restaurant-local day.
+-- ---------------------------------------------------------------------------
+create table if not exists public.staff_meals (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid constraint staff_meals_user_id_fkey references public.users (id) on delete set null,
+  staff_name text not null,
+  staff_role text not null check (staff_role in ('cashier', 'kitchen')),
+  meal_date date not null,
+  notes text,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists staff_meals_one_per_day_key on public.staff_meals (user_id, meal_date);
+create index if not exists staff_meals_meal_date_idx on public.staff_meals (meal_date desc, created_at desc);
+create index if not exists staff_meals_user_id_idx on public.staff_meals (user_id);
+
+-- Items are copied with their name so old meals never change. Unit price and
+-- line total are kept only as a reference value; staff meals are always free.
+create table if not exists public.staff_meal_items (
+  id uuid primary key default gen_random_uuid(),
+  staff_meal_id uuid not null constraint staff_meal_items_staff_meal_id_fkey references public.staff_meals (id) on delete cascade,
+  menu_item_id uuid constraint staff_meal_items_menu_item_id_fkey references public.menu_items (id) on delete set null,
+  item_name text not null,
+  quantity integer not null check (quantity > 0),
+  unit_price numeric(10, 2) not null default 0,
+  line_total numeric(10, 2) not null default 0,
+  line_no integer not null default 0,
+  created_at timestamptz not null default now()
+);
+create index if not exists staff_meal_items_staff_meal_id_idx on public.staff_meal_items (staff_meal_id);
+
+-- ---------------------------------------------------------------------------
+-- Temporary chats between an admin and a kitchen/cashier staff member.
+--   One conversation per admin + staff pair. A conversation (and all of its
+--   messages) is deleted 24 hours after its last message, so temporary chat
+--   data never piles up in the database.
+--   unread_for_admin / unread_for_staff are small counters for the badge.
+-- ---------------------------------------------------------------------------
+create table if not exists public.conversations (
+  id uuid primary key default gen_random_uuid(),
+  admin_id uuid not null constraint conversations_admin_id_fkey references public.users (id) on delete cascade,
+  staff_id uuid not null constraint conversations_staff_id_fkey references public.users (id) on delete cascade,
+  last_message_body text not null default '',
+  last_message_sender_id uuid constraint conversations_last_message_sender_id_fkey references public.users (id) on delete set null,
+  unread_for_admin integer not null default 0,
+  unread_for_staff integer not null default 0,
+  created_at timestamptz not null default now(),
+  last_message_at timestamptz not null default now()
+);
+create unique index if not exists conversations_pair_key on public.conversations (admin_id, staff_id);
+create index if not exists conversations_admin_idx on public.conversations (admin_id, last_message_at desc);
+create index if not exists conversations_staff_idx on public.conversations (staff_id, last_message_at desc);
+-- Used by the 24-hour cleanup sweep.
+create index if not exists conversations_last_message_at_idx on public.conversations (last_message_at);
+
+create table if not exists public.messages (
+  id uuid primary key default gen_random_uuid(),
+  conversation_id uuid not null constraint messages_conversation_id_fkey references public.conversations (id) on delete cascade,
+  sender_id uuid constraint messages_sender_id_fkey references public.users (id) on delete set null,
+  sender_role text not null check (sender_role in ('admin', 'cashier', 'kitchen')),
+  body text not null check (char_length(body) between 1 and 2000),
+  created_at timestamptz not null default now()
+);
+create index if not exists messages_conversation_idx on public.messages (conversation_id, created_at);
 
 -- ---------------------------------------------------------------------------
 -- Audit logs (who did what, when - shown in the admin Audit Logs page)
@@ -335,6 +407,10 @@ alter table public.settings enable row level security;
 alter table public.menu_items enable row level security;
 alter table public.orders enable row level security;
 alter table public.order_items enable row level security;
+alter table public.staff_meals enable row level security;
+alter table public.staff_meal_items enable row level security;
+alter table public.conversations enable row level security;
+alter table public.messages enable row level security;
 alter table public.audit_logs enable row level security;
 
 -- ---------------------------------------------------------------------------
@@ -345,7 +421,7 @@ do $$
 declare
   t text;
 begin
-  foreach t in array array['orders', 'order_items', 'menu_items', 'users', 'settings', 'audit_logs']
+  foreach t in array array['orders', 'order_items', 'menu_items', 'users', 'settings', 'audit_logs', 'staff_meals', 'staff_meal_items', 'conversations', 'messages']
   loop
     begin
       execute format('alter publication supabase_realtime add table public.%I', t);
@@ -354,6 +430,35 @@ begin
       when undefined_object then null;
     end;
   end loop;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 24-hour chat cleanup (optional).
+--   The Node server also deletes expired conversations on its own (on every
+--   chat request and on a timer), so chats expire even without pg_cron.
+--   If your Supabase plan has pg_cron enabled, this makes the delete happen in
+--   the database every 15 minutes as well - which keeps working while the free
+--   Render web service is asleep.
+-- ---------------------------------------------------------------------------
+do $$
+begin
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    begin
+      perform cron.unschedule('kuyae_delete_expired_conversations');
+    exception
+      when others then null;
+    end;
+    begin
+      perform cron.schedule(
+        'kuyae_delete_expired_conversations',
+        '*/15 * * * *',
+        $job$delete from public.conversations where last_message_at < now() - interval '24 hours'$job$
+      );
+    exception
+      when others then null;
+    end;
+  end if;
 end;
 $$;
 

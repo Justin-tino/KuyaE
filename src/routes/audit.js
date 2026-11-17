@@ -3,7 +3,7 @@
 const express = require('express');
 const { getClient, friendlyDbError } = require('../supabase');
 const { serializeAuditLog } = require('../lib/serialize');
-const { cleanText, clampInt, escapeLike, isUuid } = require('../lib/helpers');
+const { cleanText, clampInt, isUuid } = require('../lib/helpers');
 const { todayStr, addDaysStr, dayRange, isValidDateStr, daysBetween } = require('../lib/tz');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
@@ -34,7 +34,7 @@ router.get('/', requireAuth, requireRole('admin'), async (req, res, next) => {
     const userId = cleanText(req.query.userId, 40);
     if (userId && isUuid(userId)) query = query.eq('user_id', userId);
     const action = cleanText(req.query.action, 60);
-    if (action) query = query.ilike('action', `%${escapeLike(action)}%`);
+    if (action) query = query.eq('action', action);
     const entity = cleanText(req.query.entity, 40);
     if (entity) query = query.eq('entity', entity);
 

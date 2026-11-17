@@ -3,7 +3,7 @@
 export const state = {
   status: null, // /api/status response
   user: null, // { id, username, fullName, role }
-  settings: null, // { restaurantName, address, phone, receiptFooter, timezone }
+  settings: null, // { restaurantName, address, phone, receiptFooter, qrCodeUrl, timezone }
   realtimeLive: false, // Supabase Realtime connected on the server
 };
 

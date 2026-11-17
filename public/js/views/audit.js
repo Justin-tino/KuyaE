@@ -33,6 +33,7 @@ const ACTION_LABELS = {
   order_start: 'Started cooking',
   order_serve: 'Marked served',
   order_cancel: 'Cancelled order',
+  staff_meal_create: 'Claimed free meal',
   settings_update: 'Updated settings',
 };
 
@@ -45,6 +46,7 @@ const ACTION_TONES = {
   login_success: 'bg-emerald-100 text-emerald-900',
   order_paid: 'bg-emerald-100 text-emerald-900',
   order_serve: 'bg-emerald-100 text-emerald-900',
+  staff_meal_create: 'bg-emerald-100 text-emerald-900',
 };
 
 const filters = {
@@ -65,10 +67,8 @@ export async function mount(container) {
   rootEl = container;
   container.innerHTML = pageLoader('Loading audit logs...');
   const onClick = (event) => handleClick(event);
-  const onInput = (event) => handleInput(event);
   const onChange = (event) => handleChange(event);
   container.addEventListener('click', onClick);
-  container.addEventListener('input', onInput);
   container.addEventListener('change', onChange);
   const off = onTables(['audit_logs'], debounce(() => load(true), 800));
 
@@ -83,7 +83,6 @@ export async function mount(container) {
   return () => {
     off();
     container.removeEventListener('click', onClick);
-    container.removeEventListener('input', onInput);
     container.removeEventListener('change', onChange);
   };
 }
@@ -121,6 +120,9 @@ function detailSummary(log) {
   if (d.customerName) bits.push(d.customerName);
   if (d.name) bits.push(d.name);
   if (d.fullName) bits.push(d.fullName);
+  if (d.staffName) bits.push(d.staffName);
+  if (d.staffRole) bits.push(d.staffRole === 'kitchen' ? 'Kitchen' : 'Cashier');
+  if (d.mealDate) bits.push(String(d.mealDate));
   if (d.username && d.username !== log.username) bits.push('@' + d.username);
   if (d.attemptedUsername) bits.push('as "' + d.attemptedUsername + '"');
   if (d.method) bits.push(d.method);
@@ -137,7 +139,7 @@ function render(quiet) {
   const html = `
     <div class="space-y-4">
       <div class="card p-4">
-        <div class="grid gap-3 lg:grid-cols-5">
+        <div class="grid gap-3 lg:grid-cols-4">
           <div>
             <label class="label" for="audit-from">From</label>
             <input id="audit-from" type="date" class="input" value="${esc(filters.from)}">
@@ -158,10 +160,18 @@ function render(quiet) {
                 .join('')}
             </select>
           </div>
-          <div class="lg:col-span-2">
-            <label class="label" for="audit-action">Action contains</label>
+          <div>
+            <label class="label" for="audit-action">Action</label>
             <div class="flex gap-2">
-              <input id="audit-action" data-focus-key="audit-action" class="input" placeholder="e.g. login, order, menu" value="${esc(filters.action)}">
+              <select id="audit-action" class="input">
+                <option value="">All actions</option>
+                ${Object.entries(ACTION_LABELS)
+                  .map(
+                    ([value, label]) =>
+                      `<option value="${value}" ${filters.action === value ? 'selected' : ''}>${esc(label)}</option>`
+                  )
+                  .join('')}
+              </select>
               <button type="button" data-action="refresh" class="btn btn-md btn-secondary shrink-0">${icon('refresh', 'w-5 h-5')}</button>
             </div>
           </div>
@@ -237,16 +247,6 @@ function handleClick(event) {
   }
 }
 
-let debouncedAction = null;
-
-function handleInput(event) {
-  if (event.target.id === 'audit-action') {
-    filters.action = event.target.value;
-    if (!debouncedAction) debouncedAction = debounce(() => load(true), 450);
-    debouncedAction();
-  }
-}
-
 function handleChange(event) {
   if (event.target.id === 'audit-from') {
     filters.from = event.target.value || todayLocalStr();
@@ -260,6 +260,11 @@ function handleChange(event) {
   }
   if (event.target.id === 'audit-user') {
     filters.userId = event.target.value;
+    limit = 50;
+    load(false);
+  }
+  if (event.target.id === 'audit-action') {
+    filters.action = event.target.value;
     limit = 50;
     load(false);
   }

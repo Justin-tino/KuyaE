@@ -16,9 +16,17 @@ Runs on the Render free tier.
 
 | Role | Screens |
 | --- | --- |
-| **Cashier** | New Order, Pending Payments, Orders |
-| **Kitchen** | Kitchen board only |
-| **Admin** | Sales Dashboard, Orders, Menu, Users, Audit Logs, Sales Reports |
+| **Cashier** | New Order, Pending Payments, Orders, My Free Meal |
+| **Kitchen** | Kitchen board, My Free Meal |
+| **Admin** | Sales Dashboard, Orders, Menu, Users, Staff Meals, Audit Logs, Sales Reports |
+
+**Messages (admin, cashier and kitchen)**
+
+- Every signed-in account has a **Messages** button in the top bar (with an unread badge).
+- An admin taps **New Message**, picks one active cashier or kitchen staff member, and sends a
+  private chat. That staff member sees it in the same button and can reply.
+- Conversations are deleted automatically 24 hours after their last message, so chat data does not
+  build up in the database.
 
 **Cashier - New Order**
 
@@ -34,6 +42,8 @@ Runs on the Render free tier.
 
 - Every unpaid order, oldest first, with the total to collect.
 - **Mark as Paid** at any time, even after the food was served.
+- A sticky reminder appears while unpaid orders exist. It can be dismissed, but comes back after
+  two minutes until the pending payments are settled. The menu also shows a count badge.
 
 **Kitchen**
 
@@ -41,17 +51,30 @@ Runs on the Render free tier.
 - Shows PAID / UNPAID, Dine In / Take Out, items with big quantities, notes, and waiting time.
 - **Start Cooking** moves an order to "Now Cooking"; **Done & Served** finishes it.
 - A "Served today" list keeps the board clean.
+- **Today's Total** shows the total value of the orders served today.
+
+**Free staff meals (Cashier & Kitchen)**
+
+- **My Free Meal** lets each cashier or kitchen employee claim one free meal per day from the
+  available menu.
+- Staff meals are always zero cost. They are stored separately from customer orders and never
+  affect sales, reports, top items, staff sales totals or order numbers.
+- The page also shows the employee's own meal history.
 
 **Admin**
 
 - **Sales Dashboard**: a custom date range (from/to), gross, collected, uncollected, average order,
-  payment split, order types, top items and the latest orders.
+  payment split, order types, top items and the latest orders. A **Staff meals today** card shows
+  who from the cashier and kitchen teams claimed a free meal.
 - **Orders**: every order in a custom date range (today by default), newest first, with status and
   payment filters, a search box and a load-more button.
 - **Menu**: add/edit/delete items, photo upload, price, category, description, available/unavailable
   switch (unavailable items cannot be ordered).
 - **Users**: create staff, change role, reset password, enable/disable, delete.
-- **Audit Logs**: every sign-in, failed sign-in, order, payment, menu and user change, filterable.
+- **Staff Meals**: read-only list of every free meal claimed by cashier and kitchen staff, with date
+  range, role and staff-name filters. Admin cannot claim a staff meal.
+- **Audit Logs**: every sign-in, failed sign-in, order, payment, menu, staff meal and user change,
+  filterable.
 - **Sales Reports**: printable A4 report for any custom date range.
 
 ---
@@ -105,6 +128,7 @@ npm run watch:css  # terminal 2
 2. Open **SQL Editor > New query**, paste the entire contents of `supabase/setup.sql`, and click
    **Run**. This creates:
    - `users`, `sessions`, `settings`, `menu_items`, `orders`, `order_items`, `audit_logs`
+   - `conversations` and `messages` (temporary admin/staff chat, auto-deleted after 24 hours)
    - the `create_pos_order` function (atomic order creation with server-side prices)
    - indexes, updated-at triggers, Row Level Security with no public policies
    - the `menus` storage bucket (public read, server-side uploads only)

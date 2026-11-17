@@ -61,7 +61,10 @@ export function typeLabel(orderType) {
  * onSubmit(payload) must return a promise; the modal closes when it resolves.
  */
 export function openPaymentModal({ mode = 'create', totalCents = 0, onSubmit, submitLabel }) {
-  const ui = { choice: 'paid', method: 'cash', cash: '', reference: '', error: '' };
+  const ui = { choice: 'paid', method: 'cash', cash: '', reference: '', error: '', qrDismissed: false };
+
+  // The admin can upload an e-wallet QR code; cashiers show it on online payments.
+  const qrCodeUrl = () => (state.settings && state.settings.qrCodeUrl) || null;
 
   const modal = openModal({
     title: mode === 'create' ? 'Receive Payment' : 'Mark Order as Paid',
@@ -121,6 +124,9 @@ export function openPaymentModal({ mode = 'create', totalCents = 0, onSubmit, su
 
   function render() {
     const { diff, hasCash } = cashValues();
+    // Online payment with an uploaded QR code: show the QR first, the
+    // reference field only after the cashier closes it.
+    const showQrStep = ui.choice === 'paid' && ui.method === 'online' && !!qrCodeUrl() && !ui.qrDismissed;
     modal.setBody(`
       <div class="space-y-4">
         <div class="flex items-center justify-between rounded-2xl bg-stone-100 px-4 py-3">
@@ -170,6 +176,22 @@ export function openPaymentModal({ mode = 'create', totalCents = 0, onSubmit, su
                           .join('')}
                       </div>
                       <div data-box="change">${changeBoxHtml()}</div>
+                    </div>`
+                  : showQrStep
+                  ? `<div class="space-y-3">
+                      <p class="label">Scan to pay</p>
+                      <div class="relative mx-auto w-full max-w-[260px]">
+                        <img src="${esc(qrCodeUrl())}" alt="E-wallet QR code"
+                          class="w-full rounded-2xl border-2 border-stone-200 bg-white p-3">
+                        <button type="button" data-action="close-qr" aria-label="Close" title="Close"
+                          class="absolute -right-2 -top-2 grid h-10 w-10 place-items-center rounded-full border border-stone-200 bg-white text-stone-600 shadow-md hover:bg-stone-50">
+                          ${icon('x', 'w-5 h-5')}
+                        </button>
+                      </div>
+                      <p class="text-center text-sm font-semibold text-stone-500">
+                        Ask the customer to scan this QR code to pay ${money(totalCents)}. Close it once the
+                        payment is sent, then record the reference number.
+                      </p>
                     </div>`
                   : `<div class="space-y-3">
                       <label class="label" for="pay-ref">Reference number (optional)</label>
@@ -223,8 +245,17 @@ export function openPaymentModal({ mode = 'create', totalCents = 0, onSubmit, su
     }
     if (action === 'method') {
       ui.method = target.getAttribute('data-method');
+      // Re-show the QR code every time Online is picked.
+      ui.qrDismissed = ui.method !== 'online' || !qrCodeUrl();
       ui.error = '';
       render();
+      return;
+    }
+    if (action === 'close-qr') {
+      ui.qrDismissed = true;
+      render();
+      const refInput = modal.body.querySelector('[data-input="reference"]');
+      if (refInput) refInput.focus();
       return;
     }
     if (action === 'amount') {

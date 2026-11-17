@@ -12,11 +12,14 @@ const { startRealtime } = require('./realtime');
 const authRoutes = require('./routes/auth');
 const menuRoutes = require('./routes/menu');
 const orderRoutes = require('./routes/orders');
+const staffMealRoutes = require('./routes/staffMeals');
 const userRoutes = require('./routes/users');
 const auditRoutes = require('./routes/audit');
 const reportRoutes = require('./routes/reports');
 const settingsRoutes = require('./routes/settings');
 const eventRoutes = require('./routes/events');
+const messageRoutes = require('./routes/messages');
+const { startMessageRetention } = require('./lib/messageRetention');
 
 const app = express();
 
@@ -89,11 +92,13 @@ app.use('/api', (req, res, next) => {
 app.use('/api', authRoutes);
 app.use('/api/menu', menuRoutes);
 app.use('/api/orders', orderRoutes);
+app.use('/api/staff-meals', staffMealRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/events', eventRoutes);
+app.use('/api/messages', messageRoutes);
 
 app.use('/api', (req, res) => {
   res.status(404).json({ error: 'Not found.' });
@@ -139,6 +144,7 @@ app.use((err, req, res, next) => {
 // Boot
 // ---------------------------------------------------------------------------
 startRealtime();
+startMessageRetention();
 
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log('');

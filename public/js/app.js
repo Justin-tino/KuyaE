@@ -3,8 +3,10 @@
 import { api, setUnauthorizedHandler } from './api.js';
 import { icon } from './icons.js';
 import { state, roleHome, ROLE_LABELS } from './state.js';
-import { connectEvents, disconnectEvents, onConnection, onEvent } from './realtime.js';import {
+import { connectEvents, disconnectEvents, onConnection, onEvent, onTables } from './realtime.js';
+import {
   esc,
+  money,
   toast,
   openModal,
   withButtonLoading,
@@ -14,6 +16,7 @@ import { connectEvents, disconnectEvents, onConnection, onEvent } from './realti
   spinner,
   closeAllModals,
   confirmDialog,
+  debounce,
 } from './ui.js';
 import { renderSetupPage, renderFirstAdminPage, renderLoginPage } from './views/auth.js';
 import * as posView from './views/pos.js';
@@ -24,7 +27,11 @@ import * as dashboardView from './views/dashboard.js';
 import * as menuView from './views/menu.js';
 import * as usersView from './views/users.js';
 import * as auditView from './views/audit.js';
+import * as settingsView from './views/settings.js';
 import * as reportsView from './views/reports.js';
+import * as staffMealView from './views/staffMeal.js';
+import * as staffMealsView from './views/staffMeals.js';
+import { initChat } from './chat.js';
 
 const NAV = [
   { route: '#/dashboard', label: 'Sales Dashboard', icon: 'dashboard', roles: ['admin'] },
@@ -32,9 +39,12 @@ const NAV = [
   { route: '#/pending', label: 'Pending Payments', icon: 'clock', roles: ['cashier'] },
   { route: '#/orders', label: 'Orders', icon: 'receipt', roles: ['cashier', 'admin'] },
   { route: '#/kitchen', label: 'Kitchen', icon: 'fire', roles: ['kitchen'] },
+  { route: '#/staff-meal', label: 'My Free Meal', icon: 'bowl', roles: ['cashier', 'kitchen'] },
   { route: '#/menu', label: 'Menu', icon: 'clipboard', roles: ['admin'] },
   { route: '#/users', label: 'Users', icon: 'users', roles: ['admin'] },
+  { route: '#/staff-meals', label: 'Staff Meals', icon: 'users', roles: ['admin'] },
   { route: '#/audit', label: 'Audit Logs', icon: 'shield', roles: ['admin'] },
+  { route: '#/settings', label: 'QR', icon: 'qr', roles: ['admin'] },
   { route: '#/reports', label: 'Sales Reports', icon: 'chart', roles: ['admin'] },
 ];
 
@@ -44,9 +54,12 @@ const ROUTES = {
   '#/pending': { title: 'Pending Payments', roles: ['cashier'], view: pendingView },
   '#/orders': { title: 'Orders', roles: ['cashier', 'admin'], view: ordersView },
   '#/kitchen': { title: 'Kitchen', roles: ['kitchen'], view: kitchenView },
+  '#/staff-meal': { title: 'My Free Meal', roles: ['cashier', 'kitchen'], view: staffMealView },
   '#/menu': { title: 'Menu', roles: ['admin'], view: menuView },
   '#/users': { title: 'Users', roles: ['admin'], view: usersView },
+  '#/staff-meals': { title: 'Staff Meals', roles: ['admin'], view: staffMealsView },
   '#/audit': { title: 'Audit Logs', roles: ['admin'], view: auditView },
+  '#/settings': { title: 'QR', roles: ['admin'], view: settingsView },
   '#/reports': { title: 'Sales Reports', roles: ['admin'], view: reportsView },
 };
 
@@ -58,6 +71,7 @@ let mountToken = 0;
 let stopClock = null;
 let offSettingsEvents = null;
 let offConnection = null;
+let chatCleanup = null;
 
 const CONN_STATUS_LABELS = {
   live: 'Live',
@@ -76,6 +90,137 @@ function updateConnectionPill(status) {
     status === 'live'
       ? 'Live updates are on. Orders appear here instantly, without refreshing.'
       : 'Live updates are interrupted. The screen is refreshing on its own and will catch up.';
+}
+
+// ---------------------------------------------------------------------------
+// Cashier: pending payment reminder
+// ---------------------------------------------------------------------------
+
+const PENDING_REMINDER_MS = 120000;
+let pendingSummary = { count: 0, totalCents: 0 };
+let pendingRetryAt = 0;
+let pendingPollTimer = null;
+let pendingRetryTimer = null;
+let pendingOffTables = null;
+
+function startPendingReminder() {
+  stopPendingReminder();
+  if (!state.user || state.user.role !== 'cashier') return;
+
+  pendingOffTables = onTables(['orders'], debounce(() => refreshPendingSummary(), 1500));
+  pendingPollTimer = setInterval(() => refreshPendingSummary(), PENDING_REMINDER_MS);
+  refreshPendingSummary();
+}
+
+function stopPendingReminder() {
+  if (pendingPollTimer) clearInterval(pendingPollTimer);
+  if (pendingRetryTimer) clearTimeout(pendingRetryTimer);
+  if (pendingOffTables) pendingOffTables();
+  pendingPollTimer = null;
+  pendingRetryTimer = null;
+  pendingOffTables = null;
+  pendingSummary = { count: 0, totalCents: 0 };
+  pendingRetryAt = 0;
+  hidePendingNotice();
+  updatePendingBadge(0);
+}
+
+async function refreshPendingSummary() {
+  if (screen !== 'shell' || !state.user || state.user.role !== 'cashier') return;
+  try {
+    const data = await api('/orders/pending-summary', { silent: true });
+    pendingSummary = { count: data.count || 0, totalCents: data.totalCents || 0 };
+    updatePendingBadge(pendingSummary.count);
+    syncPendingNotice();
+  } catch {
+    // The pending page itself reports errors; this background check stays quiet.
+  }
+}
+
+function updatePendingBadge(count) {
+  const badge = document.querySelector('[data-pending-badge]');
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = count > 99 ? '99+' : String(count);
+    badge.classList.remove('hidden');
+    badge.classList.add('inline-flex');
+  } else {
+    badge.textContent = '';
+    badge.classList.add('hidden');
+    badge.classList.remove('inline-flex');
+  }
+}
+
+/** Shows the sticky reminder unless it was dismissed, still on cooldown, or the cashier is already on the list. */
+function syncPendingNotice() {
+  if (!pendingSummary.count) {
+    hidePendingNotice();
+    pendingRetryAt = 0;
+    if (pendingRetryTimer) clearTimeout(pendingRetryTimer);
+    pendingRetryTimer = null;
+    return;
+  }
+  if (location.hash === '#/pending') {
+    hidePendingNotice();
+    return;
+  }
+  if (Date.now() < pendingRetryAt) return;
+  showPendingNotice();
+}
+
+function showPendingNotice() {
+  let el = document.getElementById('pending-payment-notice');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'pending-payment-notice';
+    el.className =
+      'pointer-events-auto flex w-full items-start gap-2 rounded-xl bg-red-700 px-3 py-2.5 text-sm font-semibold text-white shadow-lg slide-up';
+    el.setAttribute('role', 'status');
+    el.innerHTML = `
+      <span class="shrink-0">${icon('alert', 'w-5 h-5')}</span>
+      <div class="min-w-0 flex-1">
+        <p class="font-extrabold leading-snug" data-notice-title></p>
+        <p class="text-xs font-semibold text-red-100" data-notice-message></p>
+      </div>
+      <button type="button" data-notice-open class="shrink-0 rounded-lg bg-white px-2 py-1 text-xs font-extrabold text-red-700 transition-colors hover:bg-red-50">
+        View
+      </button>
+      <button type="button" data-notice-close class="-mr-1 shrink-0 rounded-lg p-1 opacity-75 transition-opacity hover:bg-white/20 hover:opacity-100" aria-label="Dismiss pending payments reminder">
+        ${icon('x', 'w-4 h-4')}
+      </button>`;
+
+    el.querySelector('[data-notice-open]').addEventListener('click', () => {
+      hidePendingNotice();
+      location.hash = '#/pending';
+    });
+    el.querySelector('[data-notice-close]').addEventListener('click', () => {
+      // Dismissed on purpose: stay quiet, then remind again after 2 minutes.
+      pendingRetryAt = Date.now() + PENDING_REMINDER_MS;
+      hidePendingNotice();
+      if (pendingRetryTimer) clearTimeout(pendingRetryTimer);
+      pendingRetryTimer = setTimeout(() => {
+        pendingRetryTimer = null;
+        syncPendingNotice();
+      }, PENDING_REMINDER_MS);
+    });
+
+    const root = document.getElementById('toast-root');
+    if (!root) return;
+    root.prepend(el);
+  }
+
+  const title = el.querySelector('[data-notice-title]');
+  const message = el.querySelector('[data-notice-message]');
+  const count = pendingSummary.count;
+  if (title) title.textContent = `${count} pending payment${count === 1 ? '' : 's'}`;
+  if (message) {
+    message.textContent = `${money(pendingSummary.totalCents)} to collect. Collect before the customer leaves.`;
+  }
+}
+
+function hidePendingNotice() {
+  const el = document.getElementById('pending-payment-notice');
+  if (el) el.remove();
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +321,7 @@ async function boot() {
 
 function showLogin() {
   screen = 'login';
+  stopPendingReminder();
   closeAllModals();
   if (stopClock) {
     stopClock();
@@ -188,6 +334,14 @@ function showLogin() {
   if (offConnection) {
     offConnection();
     offConnection = null;
+  }
+  if (chatCleanup) {
+    try {
+      chatCleanup();
+    } catch {
+      /* ignore */
+    }
+    chatCleanup = null;
   }
   renderLoginPage(app, state.status, (user) => enterApp(user));
 }
@@ -204,15 +358,18 @@ async function enterApp(user) {
       address: '',
       phone: '',
       receiptFooter: 'Thank you, come again!',
+      qrCodeUrl: null,
       timezone: (state.status && state.status.timezone) || 'Asia/Manila',
     };
   }
 
   screen = 'shell';
   renderShell();
+  chatCleanup = initChat();
   connectEvents();
   offConnection = onConnection(updateConnectionPill);
   stopClock = startClock();
+  startPendingReminder();
 
   const home = roleHome(user.role);
   const target = ROUTES[location.hash] && ROUTES[location.hash].roles.includes(user.role) ? location.hash : home;
@@ -260,6 +417,10 @@ function renderShell() {
             <span id="conn-status" class="conn-pill hidden" data-conn="offline">
               <span class="conn-dot"></span><span class="conn-label">Offline</span>
             </span>
+            <button type="button" id="chat-button" class="btn btn-ghost btn-sm relative" aria-label="Messages" title="Messages">
+              ${icon('message', 'w-6 h-6')}<span class="hidden font-bold sm:inline">Messages</span>
+              <span id="chat-badge" class="absolute -right-0.5 -top-0.5 hidden h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1.5 text-[11px] font-extrabold leading-none text-white shadow"></span>
+            </button>
             <span data-clock class="hidden text-base font-semibold text-stone-500 md:inline"></span>
             <button type="button" id="account" class="btn btn-ghost btn-sm">
               ${icon('user', 'w-6 h-6')}<span class="hidden font-bold sm:inline">${esc(state.user.fullName)}</span>
@@ -338,10 +499,16 @@ function renderNav() {
       (item) =>
         `<a href="${item.route}" data-nav="${item.route}" class="navlink">
           ${icon(item.icon, 'w-6 h-6 shrink-0')}<span class="truncate">${esc(item.label)}</span>
+          ${
+            item.route === '#/pending'
+              ? '<span data-pending-badge class="ml-auto hidden h-6 min-w-6 items-center justify-center rounded-full bg-white px-1.5 text-xs font-extrabold text-red-700 shadow-sm"></span>'
+              : ''
+          }
         </a>`
     )
     .join('');
   updateNavActive();
+  updatePendingBadge(pendingSummary.count);
 }
 
 function updateNavActive() {
@@ -489,6 +656,8 @@ async function mountView() {
 
   // Leaving a page should never keep its dialog (payment, order details, ...) on screen.
   closeAllModals();
+  // Show/hide the cashier reminder as they move into or out of Pending Payments.
+  syncPendingNotice();
 
   const token = ++mountToken;
   const title = document.getElementById('page-title');
